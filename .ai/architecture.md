@@ -65,6 +65,7 @@ Aligned with [Production Grade Backend Concepts.pdf](tasks/Production%20Grade%20
     - `chunk-lifecycle-queue`: Polled by `rag-chunk-lifecycle-service` for parent-child chunk compilation and Parquet slices.
 - **Resilient Child Workflow Fan-Out (ADR-002)**:
   - Decomposes large document ingestion into root (`IngestionCoordinatorWorkflow`) and child (`DocumentPartitionWorkflow`) workflows to guarantee Temporal history event boundaries ($<10,000$ events per execution history, $<2,500$ in practice).
+  - Enforces bounded child-workflow batches (e.g., $\le 100$ concurrent child workflows per root workflow generation) combined with `workflow.NewContinueAsNewError` (carrying forward remaining pending slice manifests and aggregated progress counters) or hierarchical sub-coordinator batches, ensuring both parent and child execution histories remain strictly below the $2,500$-event operational target and $10,000$-event hard ceiling.
 - **High Availability & Redundancy**:
   - Stateless coordinator pods deployed across multi-AZ Kubernetes node groups behind load balancer with `PodDisruptionBudget` (`minAvailable: 2`).
   - Rolling deploy safety: Zero dropped client connections or interrupted ingestion runs during coordinator restarts.

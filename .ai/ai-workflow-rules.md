@@ -3,8 +3,8 @@
 ## Development Approach
 
 Build this microservice incrementally following a spec-driven workflow:
-- The specification documents in [`tasks/`](tasks) and context files in [`.ai/`](.ai) define system invariants, data structures, and operational boundaries.
-- Adhere strictly to the Go control plane coordinator architecture and the 5 backend architectural layers documented in [`.ai/architecture.md`](.ai/architecture.md) aligned with `Production Grade Backend Concepts.pdf`.
+- The specification documents in [`tasks/`](../tasks) and context files in [`.ai/`](.) define system invariants, data structures, and operational boundaries.
+- Adhere strictly to the Go control plane coordinator architecture and the 5 backend architectural layers documented in [`.ai/architecture.md`](architecture.md) aligned with `Production Grade Backend Concepts.pdf`.
 - Implement against these specs without inferring undocumented dependencies or deviating from architectural decision records (ADR-001 through ADR-005).
 
 ---

@@ -62,7 +62,7 @@ CONTROL PLANE (Stateless & Orchestration)
 - **P99 Presigned URL Generation Latency**: $<35\text{ ms}$ under sustained loads of $1,000\text{ requests per second}$.
 - **Coordinator Memory Ceiling**: Strictly $<256\text{ MiB}$ resident set size (RSS) per pod, maintaining a flat memory profile regardless of incoming file size (tested up to $10\text{ GB}$).
 - **Workflow Scale Capacity**: Ability to orchestrate documents exceeding $20,000\text{ pages}$ ($400+\text{ child workflows}$) without exceeding $10,000$ events in any single workflow execution history ($<2,500$ events per workflow in practice).
-- **Zero Dual-Write Desynchronization**: $100\%$ state consistency during compute worker crashes, with failed activities resuming from their last recorded heartbeat detail without duplicate work or database conflicts.
+- **Zero Dual-Write Desynchronization**: $100\%$ state consistency between workflow state and persistence during compute worker crashes (zero database checkpoint dual-write conflicts). Because Temporal activities execute with at-least-once semantics, retries may repeat work performed after the last recorded heartbeat (`activity.GetHeartbeatDetails`); activities must therefore resume from the last recorded checkpoint and enforce idempotent side effects (such as deterministic content-addressed S3 keys and idempotent upserts).
 - **Rolling Deploy Safety**: $0$ dropped client connections or interrupted ingestion runs during coordinator pod restarts, achieved via Redis-backed event pub/sub and Temporal workflow durability.
 
 ---

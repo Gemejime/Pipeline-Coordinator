@@ -49,7 +49,7 @@
    - Drop all Linux capabilities (`capabilities: drop: ["ALL"]`).
 2. **Kubernetes Network Policies**:
    - Coordinator ingress: Restriced to API Gateway on port `8080` (HTTP) and `50051` (gRPC).
-   - Coordinator egress: Egress allowed only to Temporal frontend (port `7233`), PostgreSQL (port `5432`), Redis (port `6379`), and Prometheus metrics collector. Egress to external internet or compute worker pods is strictly denied.
+   - Coordinator egress: Egress allowed only to Temporal frontend (port `7233`), PostgreSQL (port `5432`), Redis (port `6379`), Prometheus metrics collector, cluster DNS (`kube-dns`/`CoreDNS` on UDP/TCP port `53`), and scoped AWS S3 / STS endpoints (HTTPS port `443` via VPC Gateway/Interface Endpoints or scoped egress rules) required to authenticate and complete multipart uploads (`s3:CompleteMultipartUpload`). Egress to the general external internet or compute worker pods is strictly denied.
 
 ---
 

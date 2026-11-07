@@ -36,9 +36,9 @@
 
 ### 2. Activity Implementation & Heartbeat Continuity
 - Activities inside `internal/activity/` must:
-  - Accept `context.Context` and regularly check for cancellation (`activity.GetHeartbeatDetails(ctx, ...)`).
+  - Accept `context.Context` and regularly check for cancellation via `ctx.Done()` or `ctx.Err()`.
   - Emit heartbeats periodically (`activity.RecordHeartbeat(ctx, progress)`) for long-running operations.
-  - Inspect `activity.GetHeartbeatDetails` on restart to resume from previous progress checkpoints without duplicate work.
+  - Inspect `activity.GetHeartbeatDetails(ctx, ...)` on startup/restart to read the last recorded checkpoint data and resume progress.
   - Configure explicit activity options: `StartToCloseTimeout`, `HeartbeatTimeout`, and retry policies with exponential backoff and jitter.
 
 ---

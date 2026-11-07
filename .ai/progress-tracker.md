@@ -30,7 +30,7 @@ This roadmap tracks the implementation milestones detailed in [RAG Ingestion Coo
 1. Inspect Temporal Web UI for workflows in `Running` state exceeding SLA thresholds.
 2. Check the active task queue backlog for `doc-ai-task-queue` using Prometheus metrics.
 3. Identify if tasks are stalled on unallocated GPU worker pods or failing heartbeat intervals.
-4. Terminate or signal stalled runs using the Temporal CLI (`temporal workflow terminate`).
+4. Request graceful cancellation first (`temporal workflow cancel --workflow-id <id>`) so the workflow cleanup handler can execute `CatalogTerminalRunActivity` (using a disconnected context) and persist the terminal state in PostgreSQL. If a run is completely unresponsive and requires hard termination (`temporal workflow terminate --workflow-id <id>`), Temporal skips workflow cleanup code; operators must immediately reconcile the terminal catalog record in PostgreSQL by upserting `status = 'TERMINATED'`, `error_message`, and `completed_at = NOW()` into `pipeline_runs` for that `workflow_id`.
 
 ### Runbook 2: Recovering from S3 Rate Limiting (HTTP 503 SlowDown)
 1. Verify if multiple parallel child workflows are issuing simultaneous range requests to the same S3 prefix.
@@ -66,3 +66,4 @@ This roadmap tracks the implementation milestones detailed in [RAG Ingestion Coo
 - **GAP-05 Resolved (Redis Sequence Numbers)**: Added monotonic `sequence_number: int64` to Redis Pub/Sub progress events for delivery order validation.
 - **GAP-06 Resolved (Multimodal Slice Support)**: Expanded slice models with page ranges, audio/video time offsets, and table boundaries.
 - **GAP-07 Resolved (Observability Metrics)**: Added `coordinator_redis_events_errors_total` to track publish drop rates against alerting thresholds.
+- **GAP-08 Resolved (CI Gate Hardening & Spec Sync Refinements)**: Hardened `.github/workflows/ci.yml` permissions, pinned security/linting tool versions, enforced failure gates, aligned OpenAPI Bearer security schemes and multipart part bounds (`maxItems: 10000`), and synchronized `.ai/doc-api.md` and architecture/runbook specifications.
