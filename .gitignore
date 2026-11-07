@@ -1,0 +1,44 @@
+# Tasks and local specifications
+tasks/
+tasks
+
+# Binaries and build outputs
+/bin/
+/dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test and coverage artifacts
+*.test
+*.out
+coverage.txt
+coverage.html
+profile.pprof
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Operating System files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+
+# Temporary directories
+tmp/
+temp/
+scratch/

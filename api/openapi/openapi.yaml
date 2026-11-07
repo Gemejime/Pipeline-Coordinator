@@ -1,0 +1,334 @@
+openapi: 3.1.0
+info:
+  title: RAG Ingestion Coordinator API
+  version: 1.0.0
+  description: >
+    Control plane API for rag-ingestion-coordinator, providing presigned S3 upload
+    URL issuance, ingestion workflow triggers, and status inspection.
+servers:
+  - url: http://localhost:8080
+    description: Local coordinator gateway
+
+paths:
+  /v1/ingest/upload-url:
+    post:
+      summary: Request Presigned S3 Upload URL
+      description: >
+        Issues a cryptographically signed, time-limited presigned S3 upload URL
+        for direct multipart or single-part binary uploads bypassing coordinator heap.
+      operationId: createUploadURL
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUploadURLRequest'
+      responses:
+        '200':
+          description: Presigned upload URL created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateUploadURLResponse'
+        '400':
+          description: Invalid parameters, bad MIME type, or payload exceeds 10GB limit
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/ingest/workflows/start:
+    post:
+      summary: Start Ingestion Workflow
+      description: Triggers the root IngestionCoordinatorWorkflow on Temporal.
+      operationId: startIngestionWorkflow
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartIngestionRequest'
+      responses:
+        '202':
+          description: Workflow accepted and scheduled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StartIngestionResponse'
+        '400':
+          description: Bad request payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/ingest/workflows/{id}/status:
+    get:
+      summary: Query Workflow Status
+      description: Retrieves in-flight workflow state or terminal cataloged run metrics.
+      operationId: getWorkflowStatus
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The Temporal Workflow ID
+          schema:
+            type: string
+        - name: tenant_id
+          in: query
+          required: false
+          description: Tenant isolation filter
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Workflow status details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowStatusResponse'
+        '404':
+          description: Workflow not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /healthz:
+    get:
+      summary: Liveness Probe
+      description: Verifies HTTP server event loop vitality.
+      operationId: livenessProbe
+      responses:
+        '200':
+          description: Service is alive
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: healthy
+
+  /ready:
+    get:
+      summary: Readiness Probe
+      description: Verifies active connections to Temporal, PostgreSQL, and Redis.
+      operationId: readinessProbe
+      responses:
+        '200':
+          description: Service dependencies are ready
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ready
+                  checks:
+                    type: object
+                    properties:
+                      temporal:
+                        type: string
+                        example: connected
+                      postgres:
+                        type: string
+                        example: connected
+                      redis:
+                        type: string
+                        example: connected
+        '503':
+          description: Service dependencies unavailable
+
+  /metrics:
+    get:
+      summary: Prometheus Metrics
+      description: Returns Prometheus metrics formatted in OpenMetrics / Prometheus text standard.
+      operationId: getMetrics
+      responses:
+        '200':
+          description: Prometheus metrics text stream
+          content:
+            text/plain:
+              schema:
+                type: string
+
+components:
+  schemas:
+    CreateUploadURLRequest:
+      type: object
+      required:
+        - tenant_id
+        - filename
+        - content_type
+        - content_length_bytes
+        - content_hash
+      properties:
+        tenant_id:
+          type: string
+          example: tenant-corp-01
+        filename:
+          type: string
+          example: quarterly_report.pdf
+        content_type:
+          type: string
+          example: application/pdf
+        content_length_bytes:
+          type: integer
+          format: int64
+          maximum: 10737418240
+          example: 104857600
+        content_hash:
+          type: string
+          description: SHA-256 digest of payload for idempotent addressing
+          example: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+
+    CreateUploadURLResponse:
+      type: object
+      required:
+        - upload_id
+        - tenant_id
+        - s3_bucket
+        - s3_key
+        - presigned_url
+        - expires_at
+        - lease_seconds
+      properties:
+        upload_id:
+          type: string
+          example: upl_01HXYZ1234567890ABCDEF
+        tenant_id:
+          type: string
+          example: tenant-corp-01
+        s3_bucket:
+          type: string
+          example: rag-ingestion-bucket
+        s3_key:
+          type: string
+          example: raw/tenant-corp-01/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/quarterly_report.pdf
+        presigned_url:
+          type: string
+          format: uri
+          description: Pre-authenticated S3 upload URL (Redacted in logs)
+        expires_at:
+          type: string
+          format: date-time
+          example: 2026-11-07T08:35:00Z
+        lease_seconds:
+          type: integer
+          example: 900
+
+    StartIngestionRequest:
+      type: object
+      required:
+        - tenant_id
+        - document_id
+        - s3_bucket
+        - s3_key
+        - content_hash
+        - total_bytes
+        - mime_type
+      properties:
+        tenant_id:
+          type: string
+          example: tenant-corp-01
+        document_id:
+          type: string
+          example: doc-01HXYZ1234567890
+        s3_bucket:
+          type: string
+          example: rag-ingestion-bucket
+        s3_key:
+          type: string
+          example: raw/tenant-corp-01/hash/quarterly_report.pdf
+        content_hash:
+          type: string
+          example: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+        total_bytes:
+          type: integer
+          format: int64
+          example: 104857600
+        mime_type:
+          type: string
+          example: application/pdf
+        pipeline_config_id:
+          type: string
+          example: default-multimodal-v1
+
+    StartIngestionResponse:
+      type: object
+      required:
+        - workflow_id
+        - run_id
+        - status
+        - started_at
+      properties:
+        workflow_id:
+          type: string
+          example: ingest-tenant-corp-01-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+        run_id:
+          type: string
+          format: uuid
+          example: 4b68a85c-197e-4074-a698-c9ceca2ef11d
+        status:
+          type: string
+          example: RUNNING
+        started_at:
+          type: string
+          format: date-time
+          example: 2026-11-07T08:20:00Z
+
+    WorkflowStatusResponse:
+      type: object
+      required:
+        - workflow_id
+        - run_id
+        - tenant_id
+        - status
+      properties:
+        workflow_id:
+          type: string
+        run_id:
+          type: string
+        tenant_id:
+          type: string
+        status:
+          type: string
+          example: COMPLETED
+        total_slices:
+          type: integer
+          example: 8
+        completed_slices:
+          type: integer
+          example: 8
+        failed_slices:
+          type: integer
+          example: 0
+        total_pages:
+          type: integer
+          example: 400
+        duration_seconds:
+          type: number
+          format: double
+          example: 45.2
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          example: BAD_REQUEST
+        message:
+          type: string
+          example: Unsupported MIME type
