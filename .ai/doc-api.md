@@ -153,8 +153,10 @@ Starts an `IngestionCoordinatorWorkflow` instance on Temporal.
 
 ---
 
-#### 3. `GET /v1/ingest/workflows/{id}/status`
+#### 4. `GET /v1/ingest/workflows/{id}/status`
 Retrieves in-flight state from Temporal or terminal record from PostgreSQL.
+- **Query Parameters**:
+  - `tenant_id` (required): Tenant identifier filter; validated strictly against the authenticated Bearer token claims to prevent cross-tenant access.
 
 - **Response `200 OK`**:
 ```json
@@ -175,7 +177,7 @@ Retrieves in-flight state from Temporal or terminal record from PostgreSQL.
 
 ---
 
-#### 4. `GET /healthz` & `GET /ready`
+#### 5. `GET /healthz` & `GET /ready`
 - **`GET /healthz`**: Returns `200 OK` with `{"status": "healthy"}`.
 - **`GET /ready`**: Returns `200 OK` when PostgreSQL, Redis, and Temporal clients are connected:
 ```json
@@ -259,6 +261,8 @@ message GetIngestionStatusResponse {
   int32 failed_slices = 7;
   int32 total_pages = 8;
   double duration_seconds = 9;
+  string created_at = 10;   // RFC 3339 / ISO-8601 UTC timestamp
+  string completed_at = 11; // RFC 3339 / ISO-8601 UTC timestamp
 }
 ```
 
@@ -417,6 +421,6 @@ ON pipeline_runs (tenant_id, created_at DESC);
   "progress_pct": 65.0,
   "slices_completed": 5,
   "total_slices": 8,
-  "timestamp": "2026-11-07T08:20:30Z"
+  "timestamp_unix": 1794039630
 }
 ```

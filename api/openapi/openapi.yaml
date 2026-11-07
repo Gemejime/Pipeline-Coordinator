@@ -9,6 +9,9 @@ servers:
   - url: http://localhost:8080
     description: Local coordinator gateway
 
+security:
+  - BearerAuth: []
+
 paths:
   /v1/ingest/upload-url:
     post:
@@ -17,6 +20,9 @@ paths:
         Issues a cryptographically signed, time-limited presigned S3 upload URL
         for direct multipart or single-part binary uploads bypassing coordinator heap.
       operationId: createUploadURL
+      security:
+        - BearerAuth:
+            - ingest:write
       requestBody:
         required: true
         content:
@@ -42,6 +48,9 @@ paths:
       summary: Complete Multipart S3 Upload
       description: Finalizes an S3 multipart upload with the client-submitted part ETags.
       operationId: completeUploadURL
+      security:
+        - BearerAuth:
+            - ingest:write
       requestBody:
         required: true
         content:
@@ -67,6 +76,9 @@ paths:
       summary: Start Ingestion Workflow
       description: Triggers the root IngestionCoordinatorWorkflow on Temporal.
       operationId: startIngestionWorkflow
+      security:
+        - BearerAuth:
+            - ingest:write
       requestBody:
         required: true
         content:
@@ -90,8 +102,15 @@ paths:
   /v1/ingest/workflows/{id}/status:
     get:
       summary: Query Workflow Status
-      description: Retrieves in-flight workflow state or terminal cataloged run metrics.
+      description: >
+        Retrieves in-flight workflow state or terminal cataloged run metrics.
+        Tenant isolation is strictly enforced by deriving `tenant_id` from the
+        authenticated Bearer token claims and verifying it against the supplied
+        `tenant_id` query parameter.
       operationId: getWorkflowStatus
+      security:
+        - BearerAuth:
+            - ingest:read
       parameters:
         - name: id
           in: path
@@ -101,8 +120,10 @@ paths:
             type: string
         - name: tenant_id
           in: query
-          required: false
-          description: Tenant isolation filter
+          required: true
+          description: >
+            Required tenant identifier filter; validated strictly against the
+            authenticated Bearer token claims to prevent cross-tenant access.
           schema:
             type: string
       responses:
@@ -124,6 +145,7 @@ paths:
       summary: Liveness Probe
       description: Verifies HTTP server event loop vitality.
       operationId: livenessProbe
+      security: []
       responses:
         '200':
           description: Service is alive
@@ -141,6 +163,7 @@ paths:
       summary: Readiness Probe
       description: Verifies active connections to Temporal, PostgreSQL, and Redis.
       operationId: readinessProbe
+      security: []
       responses:
         '200':
           description: Service dependencies are ready
@@ -172,6 +195,7 @@ paths:
       summary: Prometheus Metrics
       description: Returns Prometheus metrics formatted in OpenMetrics / Prometheus text standard.
       operationId: getMetrics
+      security: []
       responses:
         '200':
           description: Prometheus metrics text stream
@@ -181,6 +205,14 @@ paths:
                 type: string
 
 components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        Bearer JWT token authenticating the tenant and authorizing `ingest:write`
+        or `ingest:read` scopes.
   schemas:
     CreateUploadURLRequest:
       type: object
@@ -242,6 +274,7 @@ components:
           example: 104857600
         parts:
           type: array
+          maxItems: 10000
           description: Presigned part URLs for multipart uploads (files >100MB up to 10GB)
           items:
             $ref: '#/components/schemas/PresignedPart'
@@ -290,6 +323,7 @@ components:
           example: raw/tenant-corp-01/hash/quarterly_report.pdf
         parts:
           type: array
+          maxItems: 10000
           items:
             $ref: '#/components/schemas/CompletedPart'
 

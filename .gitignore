@@ -1,6 +1,5 @@
 # Tasks and local specifications
-tasks/
-tasks
+/tasks/
 
 # Binaries and build outputs
 /bin/
@@ -13,7 +12,7 @@ tasks
 
 # Test and coverage artifacts
 *.test
-*.out
+coverage.out
 coverage.txt
 coverage.html
 profile.pprof

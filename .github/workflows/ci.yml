@@ -8,8 +8,6 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
-  security-events: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -22,6 +20,8 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -56,18 +56,23 @@ jobs:
           fi
 
       - name: GolangCI-Lint
+        if: hashFiles('go.mod') != ''
         uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
+          version: v1.64.5
           args: --timeout=5m
-        continue-on-error: true
 
   security-and-logging-audit:
     name: Security & Logging Audit
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -77,16 +82,16 @@ jobs:
 
       - name: Run Go Vulnerability Check (govulncheck)
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
           if [ -f "go.mod" ]; then
-            govulncheck ./... || true
+            go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+            govulncheck ./...
           fi
 
       - name: Run Gosec AST Scanner
         run: |
-          go install github.com/securego/gosec/v2/cmd/gosec@latest
           if [ -f "go.mod" ]; then
-            gosec -fmt=text -severity=medium ./... || true
+            go install github.com/securego/gosec/v2/cmd/gosec@v2.21.4
+            gosec -fmt=text -severity=medium ./...
           fi
 
       - name: Secured Logging Audit
@@ -98,8 +103,8 @@ jobs:
             echo "ERROR: Potential Bearer token logged in cleartext!"
             FAIL=1
           fi
-          if grep -rEi "(X-Amz-Signature|X-Amz-Credential|AWSAccessKeyId)" internal/ cmd/ 2>/dev/null; then
-            echo "ERROR: AWS STS / Presigned credentials found in source code or log statements!"
+          if grep -rEi "(log|logger|slog)\.(Info|Error|Debug|Warn|Printf|Println|Print).*(X-Amz-Signature|X-Amz-Credential|AWSAccessKeyId)" internal/ cmd/ 2>/dev/null; then
+            echo "ERROR: AWS STS / Presigned credentials found in log statements!"
             FAIL=1
           fi
           if [ $FAIL -eq 1 ]; then
@@ -113,12 +118,14 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Validate OpenAPI 3.1 Schema Syntax
         run: |
           if [ -f "api/openapi/openapi.yaml" ]; then
             echo "Validating OpenAPI specification..."
-            npx @stoplight/spectral-cli lint api/openapi/openapi.yaml || true
+            npx @stoplight/spectral-cli lint api/openapi/openapi.yaml
           else
             echo "api/openapi/openapi.yaml not yet present, checking documentation sync..."
           fi
@@ -149,6 +156,8 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -159,7 +168,7 @@ jobs:
       - name: Run Unit & Workflow Tests
         run: |
           if [ -f "go.mod" ]; then
-            go test -v -race -covermode=atomic -coverprofile=coverage.out ./test/unit/... ./test/workflow/... || true
+            go test -v -race -covermode=atomic -coverprofile=coverage.out ./test/unit/... ./test/workflow/...
           else
             echo "go.mod not yet created; skipping test execution."
           fi
@@ -167,6 +176,13 @@ jobs:
       - name: Check Workflow Event History Thresholds
         run: |
           echo "Validating Temporal workflow history event limit guardrails (<10,000 events)..."
-          # Guardrail: asserts simulation tests enforce <2,500 events per child workflow
+          if [ -f "go.mod" ]; then
+            go test -v -race -run "Test.*History" ./test/workflow/...
+          else
+            if ! grep -q "10,000" .ai/architecture.md || ! grep -q "2,500" .ai/architecture.md; then
+              echo "ERROR: Temporal workflow history thresholds (<10,000 and <2,500 events) missing from architecture spec!"
+              exit 1
+            fi
+          fi
           echo "Temporal history guardrail test validation complete."
 

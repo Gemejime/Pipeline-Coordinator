@@ -35,7 +35,7 @@ The `rag-ingestion-coordinator` is the authoritative Go-based control plane micr
 ### 1. Continuous Doc API & OpenAPI Maintenance
 The API contracts defined in [`.ai/doc-api.md`](.ai/doc-api.md) and the OpenAPI 3.1 specification at [`api/openapi/openapi.yaml`](api/openapi/openapi.yaml) **MUST be kept synchronized on every code change or addition, no matter how little the created or modified code is**.
 - Whenever an endpoint, request payload, response schema, error model, workflow argument, or database column is added or altered, both `api/openapi/openapi.yaml` and `.ai/doc-api.md` must be updated in the exact same change set.
-- CI includes an automated contract sync gate (`openapi-and-contract-sync`) that fails if endpoints or schemas diverge.
+- CI includes an automated contract sync gate (`openapi-and-contract-sync`) that validates OpenAPI syntax with Spectral and verifies that every endpoint path defined in `api/openapi/openapi.yaml` is documented in `.ai/doc-api.md` (it does not perform automated deep schema or field-level comparison).
 
 ### 2. Secured Logging Invariant
 - **Structured JSON Logging**: All logs must be output as machine-parseable JSON lines via `log/slog` or structured logger.
