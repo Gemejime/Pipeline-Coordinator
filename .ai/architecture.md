@@ -7,7 +7,7 @@
 | **Language Runtime** | Go 1.23+ (64-bit) | High-concurrency network I/O, control-plane coordination, minimal memory overhead |
 | **Memory Ceiling** | Zero-Heap Ingestion ($<256\text{ MiB}$ RSS) | Zero buffering/streaming of binary payloads or Arrow columnar data; flat memory ceiling |
 | **Orchestration** | Temporal Go SDK (`go.temporal.io/sdk`) | Workflow DAGs: Root `IngestionCoordinatorWorkflow` & Child `DocumentPartitionWorkflow` |
-| **Temporal Queues** | Polyglot Task Queue Registry | `inspection-queue` (random-access headers), `doc-ai-queue` (Docling/OCR/ASR), `chunk-lifecycle-queue` |
+| **Temporal Queues** | Polyglot Task Queue Registry | `inspection-queue` (random-access headers), `doc-ai-task-queue` (Docling/OCR/ASR), `chunk-lifecycle-queue` |
 | **State Persistence** | PostgreSQL 16+ (via `pgxpool` / PgBouncer) | Pipeline configurations and terminal execution records (`COMPLETED`, `FAILED`); zero dual-writes |
 | **Telemetry Bus** | Redis 7.2+ Cluster / Sentinel | High-throughput, low-latency Pub/Sub event broadcasting for decoupled client progress streaming |
 | **Object Storage** | AWS S3 / Compatible (AWS SDK v2) | Presigned upload URLs (15-min lease) and deterministic content-addressed artifact keys |
@@ -25,7 +25,8 @@ Aligned with [Production Grade Backend Concepts.pdf](tasks/Production%20Grade%20
   - Initializes runtime environment, parses 12-factor configuration, establishes connection pools (PostgreSQL `pgxpool`, Redis client, Temporal client, AWS S3 presign client).
   - Bootstraps the HTTP listener (`:8080`) and gRPC control listener (`:50051`) with graceful shutdown handling OS signals (`SIGINT`, `SIGTERM`).
 - **Endpoints & Routing (`internal/transport/http/`)**:
-  - `POST /v1/ingest/upload-url`: REST endpoint issuing presigned S3 upload URLs with parameter validation and lease expiration policies.
+  - `POST /v1/ingest/upload-url`: REST endpoint issuing presigned S3 upload URLs with parameter validation and lease expiration policies (supports single-part and multipart upload handoffs for payloads up to 10 GB).
+  - `POST /v1/ingest/upload-url/complete`: REST endpoint completing multipart S3 uploads with client-submitted ETag manifests.
   - `POST /v1/ingest/workflows/start`: Initiates `IngestionCoordinatorWorkflow` with tenant, document hash, and execution params.
   - `GET /v1/ingest/workflows/{id}/status`: Queries Temporal workflow execution state and terminal PostgreSQL metrics.
   - `GET /healthz`: Liveness probe verifying process event loop and basic readiness.
@@ -60,7 +61,7 @@ Aligned with [Production Grade Backend Concepts.pdf](tasks/Production%20Grade%20
 - **Asynchronous Task Queues & Workers**:
   - Discrete Temporal Task Queues:
     - `inspection-queue`: Light Go/Python inspection worker pods performing random-access byte inspection (PDF headers, cross-reference tables, audio container atoms).
-    - `doc-ai-queue`: Autoscaling GPU Python workers executing Docling, OCR, and ASR.
+    - `doc-ai-task-queue`: Autoscaling GPU Python workers executing Docling, OCR, and ASR.
     - `chunk-lifecycle-queue`: Polled by `rag-chunk-lifecycle-service` for parent-child chunk compilation and Parquet slices.
 - **Resilient Child Workflow Fan-Out (ADR-002)**:
   - Decomposes large document ingestion into root (`IngestionCoordinatorWorkflow`) and child (`DocumentPartitionWorkflow`) workflows to guarantee Temporal history event boundaries ($<10,000$ events per execution history, $<2,500$ in practice).
@@ -87,6 +88,7 @@ Aligned with [Production Grade Backend Concepts.pdf](tasks/Production%20Grade%20
   - `coordinator_workflow_starts_total`: Counter tracking initiated root workflows by tenant.
   - `coordinator_child_workflows_spawned`: Histogram tracking fan-out slices per document.
   - `coordinator_redis_events_published_total`: Counter tracking telemetry publication success.
+  - `coordinator_redis_events_errors_total`: Counter tracking telemetry publication failures.
   - `temporal_activity_schedule_to_start_seconds`: Latency tracking task queue backlog across worker pools.
 - **Alert Rules**:
   - *High Task Queue Backlog*: Alert fires if `schedule_to_start` latency on `doc-ai-task-queue` exceeds $60\text{ seconds}$ for $>5\text{ minutes}$ (triggers GPU worker horizontal autoscaling).

@@ -6,7 +6,7 @@ This roadmap tracks the implementation milestones detailed in [RAG Ingestion Coo
 
 | Phase | Duration | Focus Area | Deliverables & Exit Gates | Status |
 | :--- | :--- | :--- | :--- | :--- |
-| **Phase 1: Workflow Architecture & Task Queues** | Weeks 1–2 | Polyglot Temporal Topology & Contracts | - Protobuf contracts for activity inputs/outputs across Go and Python workers.<br>- Root `IngestionCoordinatorWorkflow` and child `DocumentPartitionWorkflow` definitions.<br>- Configuration of discrete Temporal Task Queues (`inspection-queue`, `doc-ai-queue`, `chunk-lifecycle-queue`). | In Progress |
+| **Phase 1: Workflow Architecture & Task Queues** | Weeks 1–2 | Polyglot Temporal Topology & Contracts | - Protobuf contracts for activity inputs/outputs across Go and Python workers.<br>- Root `IngestionCoordinatorWorkflow` and child `DocumentPartitionWorkflow` definitions.<br>- Configuration of discrete Temporal Task Queues (`inspection-queue`, `doc-ai-task-queue`, `chunk-lifecycle-queue`). | In Progress |
 | **Phase 2: Ingress & Inspection Activity** | Weeks 3–4 | Presigning & Isolated Container Inspection | - Presigned S3 multipart URL issuance with 15-minute lease management.<br>- Isolated Inspection Activity worker inspecting PDF/audio headers via byte ranges.<br>- Deterministic S3 artifact key generation based on content and range hashes. | Pending |
 | **Phase 3: Child Workflow Engine & Fan-Out** | Weeks 5–6 | Dynamic Orchestration & State Tracking | - Root workflow dynamic fan-out to child workflows via `manifest_planner`.<br>- Integration with Temporal Python SDK in `rag-document-ai-worker`.<br>- Native Temporal heartbeat detail checkpoints without relational database dual-writes. | Pending |
 | **Phase 4: Telemetry & Event Offloading** | Weeks 7–8 | Redis Event Bus & Terminal Cataloging | - Redis Pub/Sub integration for decoupled progress event broadcast.<br>- Terminal execution logging in PostgreSQL upon workflow completion.<br>- Integration verification with downstream `rag-chunk-lifecycle-service`. | Pending |
@@ -54,3 +54,15 @@ This roadmap tracks the implementation milestones detailed in [RAG Ingestion Coo
   - `docs:` for documentation updates
   - `tests:` for tests addition and modification
   - `chore:` for maintenance tasks and environment setup
+
+---
+
+## 5. Specification Audit & Pressure-Test Refinements
+
+- **GAP-01 Resolved (Task Queue Standardization)**: Standardized on `doc-ai-task-queue` across all documentation, architecture, and configuration contexts to avoid polyglot worker stalls.
+- **GAP-02 Resolved (10 GB S3 Multipart Uploads)**: Added `POST /v1/ingest/upload-url/complete` and presigned part manifests to `api/openapi/openapi.yaml` and `.ai/doc-api.md`, circumventing AWS S3's 5 GB single-PUT limitation.
+- **GAP-03 Resolved (`types.proto` Specification)**: Formulated `api/proto/v1/types.proto` in `.ai/doc-api.md` covering multimodal partition slices, configs, and events.
+- **GAP-04 Resolved (HeartbeatDetails Schema)**: Formulated typed `HeartbeatDetails` message to guarantee zero dual-write checkpoint recovery (ADR-003).
+- **GAP-05 Resolved (Redis Sequence Numbers)**: Added monotonic `sequence_number: int64` to Redis Pub/Sub progress events for delivery order validation.
+- **GAP-06 Resolved (Multimodal Slice Support)**: Expanded slice models with page ranges, audio/video time offsets, and table boundaries.
+- **GAP-07 Resolved (Observability Metrics)**: Added `coordinator_redis_events_errors_total` to track publish drop rates against alerting thresholds.

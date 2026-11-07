@@ -16,7 +16,8 @@ This document is the authoritative specification for all public and internal int
 
 | Method | Endpoint | Description | Auth Scope |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/v1/ingest/upload-url` | Generate presigned S3 upload URL with expiration lease | `ingest:write` |
+| `POST` | `/v1/ingest/upload-url` | Generate presigned S3 upload URL (single-part or multipart lease) | `ingest:write` |
+| `POST` | `/v1/ingest/upload-url/complete` | Finalize S3 multipart upload with part ETag list | `ingest:write` |
 | `POST` | `/v1/ingest/workflows/start` | Trigger Root Ingestion Temporal Workflow | `ingest:write` |
 | `GET` | `/v1/ingest/workflows/{id}/status` | Query in-flight workflow status and terminal run metrics | `ingest:read` |
 | `GET` | `/healthz` | Kubernetes Liveness Probe | Public |
@@ -30,7 +31,7 @@ This document is the authoritative specification for all public and internal int
 ### Detailed Endpoint Contracts
 
 #### 1. `POST /v1/ingest/upload-url`
-Issues a cryptographically signed, short-lived S3 upload URL for zero-heap client uploads.
+Issues a cryptographically signed, short-lived S3 upload URL for zero-heap client uploads (supports single-part for ≤100MB and multipart for >100MB up to 10GB).
 
 - **Request Headers**:
   - `Authorization: Bearer <token>`
@@ -46,7 +47,7 @@ Issues a cryptographically signed, short-lived S3 upload URL for zero-heap clien
   "content_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 }
 ```
-- **Response `200 OK`**:
+- **Response `200 OK` (Single-Part / <= 100MB)**:
 ```json
 {
   "upload_id": "upl_01HXYZ1234567890ABCDEF",
@@ -54,6 +55,28 @@ Issues a cryptographically signed, short-lived S3 upload URL for zero-heap clien
   "s3_bucket": "rag-ingestion-bucket",
   "s3_key": "raw/tenant-corp-01/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/annual-report-2026.pdf",
   "presigned_url": "https://rag-ingestion-bucket.s3.amazonaws.com/raw/...?[REDACTED_IN_LOGS]",
+  "expires_at": "2026-11-07T08:35:00Z",
+  "lease_seconds": 900
+}
+```
+- **Response `200 OK` (Multipart / > 100MB up to 10GB)**:
+```json
+{
+  "upload_id": "mp_upload_01HXYZ1234567890ABCDEF",
+  "tenant_id": "tenant-corp-01",
+  "s3_bucket": "rag-ingestion-bucket",
+  "s3_key": "raw/tenant-corp-01/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/annual-report-2026.pdf",
+  "part_size_bytes": 104857600,
+  "parts": [
+    {
+      "part_number": 1,
+      "presigned_url": "https://rag-ingestion-bucket.s3.amazonaws.com/raw/...?partNumber=1&[REDACTED_IN_LOGS]"
+    },
+    {
+      "part_number": 2,
+      "presigned_url": "https://rag-ingestion-bucket.s3.amazonaws.com/raw/...?partNumber=2&[REDACTED_IN_LOGS]"
+    }
+  ],
   "expires_at": "2026-11-07T08:35:00Z",
   "lease_seconds": 900
 }
@@ -68,7 +91,41 @@ Issues a cryptographically signed, short-lived S3 upload URL for zero-heap clien
 
 ---
 
-#### 2. `POST /v1/ingest/workflows/start`
+#### 2. `POST /v1/ingest/upload-url/complete`
+Finalizes an S3 multipart upload after the client has uploaded all parts.
+
+- **Request Body**:
+```json
+{
+  "upload_id": "mp_upload_01HXYZ1234567890ABCDEF",
+  "tenant_id": "tenant-corp-01",
+  "s3_bucket": "rag-ingestion-bucket",
+  "s3_key": "raw/tenant-corp-01/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/annual-report-2026.pdf",
+  "parts": [
+    {
+      "part_number": 1,
+      "etag": "\"d41d8cd98f00b204e9800998ecf8427e\""
+    },
+    {
+      "part_number": 2,
+      "etag": "\"a1b2c3d4e5f6789012345678abcdef01\""
+    }
+  ]
+}
+```
+- **Response `200 OK`**:
+```json
+{
+  "upload_id": "mp_upload_01HXYZ1234567890ABCDEF",
+  "status": "COMPLETED",
+  "s3_location": "s3://rag-ingestion-bucket/raw/tenant-corp-01/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/annual-report-2026.pdf",
+  "completed_at": "2026-11-07T08:30:00Z"
+}
+```
+
+---
+
+#### 3. `POST /v1/ingest/workflows/start`
 Starts an `IngestionCoordinatorWorkflow` instance on Temporal.
 
 - **Request Body**:
@@ -205,6 +262,76 @@ message GetIngestionStatusResponse {
 }
 ```
 
+### Shared Domain Payloads (`api/proto/v1/types.proto`)
+
+```protobuf
+syntax = "proto3";
+
+package rag.coordinator.v1;
+
+option go_package = "rag-ingestion-coordinator/api/proto/v1;coordinatorv1";
+
+enum MultimodalModality {
+  MULTIMODAL_MODALITY_UNSPECIFIED = 0;
+  MULTIMODAL_MODALITY_DOCUMENT_PDF = 1;
+  MULTIMODAL_MODALITY_AUDIO = 2;
+  MULTIMODAL_MODALITY_VIDEO = 3;
+  MULTIMODAL_MODALITY_TABULAR = 4;
+}
+
+message PartitionSlice {
+  string slice_id = 1;
+  int32 slice_index = 2;
+  int32 total_slices = 3;
+  string tenant_id = 4;
+  string document_id = 5;
+  string content_hash = 6;
+  string s3_input_bucket = 7;
+  string s3_input_key = 8;
+  string s3_output_parquet_key = 9;
+  MultimodalModality modality = 10;
+  int32 start_page = 11;
+  int32 end_page = 12;
+  double start_time_seconds = 13;
+  double end_time_seconds = 14;
+  double overlap_seconds = 15;
+}
+
+// HeartbeatDetails represents the native Temporal activity heartbeat payload (ADR-003)
+message HeartbeatDetails {
+  string slice_id = 1;
+  int32 slice_index = 2;
+  int32 last_processed_unit = 3; // e.g. last page number or seconds offset
+  int32 processed_units = 4;
+  int32 total_units = 5;
+  string intermediate_s3_key = 6;
+  int64 updated_at_unix = 7;
+}
+
+message PipelineConfig {
+  string id = 1;
+  string tenant_id = 2;
+  string name = 3;
+  int32 chunk_size_tokens = 4;
+  int32 chunk_overlap_tokens = 5;
+  bool ocr_enabled = 6;
+}
+
+message ProgressMilestoneEvent {
+  string event_id = 1;
+  int64 sequence_number = 2;
+  string tenant_id = 3;
+  string document_id = 4;
+  string workflow_id = 5;
+  string stage = 6;
+  string status = 7;
+  double progress_pct = 8;
+  int32 slices_completed = 9;
+  int32 total_slices = 10;
+  int64 timestamp_unix = 11;
+}
+```
+
 ---
 
 ## 3. Temporal Workflow & Activity Signatures
@@ -227,7 +354,7 @@ func DocumentPartitionWorkflow(ctx workflow.Context, slice PartitionSlice) (*Par
 | :--- | :--- | :--- | :--- |
 | `InspectDocumentHeaderActivity` | `inspection-queue` | Performs random-access byte inspection on S3 objects to read page counts and layout metadata | 10s |
 | `PresignS3ArtifactActivity` | Go Coordinator | Generates presigned URLs for child worker artifact emission | N/A (<50ms) |
-| `DispatchDocAIExtractActivity` | `doc-ai-queue` | Polled by Python Doc AI workers for layout parsing, OCR, and chunking | 15s |
+| `DispatchDocAIExtractActivity` | `doc-ai-task-queue` | Polled by Python Doc AI workers for layout parsing, OCR, and chunking | 15s |
 | `CompileChunksActivity` | `chunk-lifecycle-queue` | Polled by `rag-chunk-lifecycle-service` to build chunk trees | 10s |
 | `PublishMilestoneActivity` | Go Coordinator | Publishes stage transition events to Redis Pub/Sub | N/A (<20ms) |
 | `CatalogTerminalRunActivity` | Go Coordinator | Writes final `COMPLETED` or `FAILED` record to PostgreSQL | N/A (Atomic write) |
@@ -281,6 +408,7 @@ ON pipeline_runs (tenant_id, created_at DESC);
 ```json
 {
   "event_id": "evt_01HXYZ1234567890",
+  "sequence_number": 1,
   "tenant_id": "tenant-corp-01",
   "document_id": "doc-01HXYZ1234567890",
   "workflow_id": "ingest-tenant-corp-01-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
