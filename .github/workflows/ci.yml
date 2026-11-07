@@ -169,3 +169,4 @@ jobs:
           echo "Validating Temporal workflow history event limit guardrails (<10,000 events)..."
           # Guardrail: asserts simulation tests enforce <2,500 events per child workflow
           echo "Temporal history guardrail test validation complete."
+

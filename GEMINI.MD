@@ -70,3 +70,4 @@ Before completing any task or committing changes:
 4. Verify [`.ai/doc-api.md`](.ai/doc-api.md) and [`api/openapi/openapi.yaml`](api/openapi/openapi.yaml) reflect any API or schema changes.
 5. Verify Secured Logging rules (no secrets, raw presigned URLs, or PII logged).
 6. Update [`.ai/progress-tracker.md`](.ai/progress-tracker.md).
+

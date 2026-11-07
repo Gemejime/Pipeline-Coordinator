@@ -332,3 +332,4 @@ components:
         message:
           type: string
           example: Unsupported MIME type
+
