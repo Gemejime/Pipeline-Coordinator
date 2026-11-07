@@ -119,9 +119,10 @@ rag-ingestion-coordinator/
 │   │   ├── ingestion_root.go       # IngestionCoordinatorWorkflow (inspection & child fan-out)
 │   │   ├── document_partition.go   # DocumentPartitionWorkflow (per-slice activity chain)
 │   │   └── retry.go                # Shared retry and backoff definitions
-│   ├── activity/                   # Temporal Activities executed by Go workers
+│   ├── activity/                   # Temporal Activities & polyglot contracts
 │   │   ├── presign.go              # S3 presigned URL generation activities
 │   │   ├── inspection.go           # Header inspection activity (or dispatch to inspect queue)
+│   │   ├── polyglot.go             # Polyglot DocAI extract & chunk compilation activity contracts
 │   │   ├── catalog.go              # Terminal database persistence activities
 │   │   └── notification.go         # Activity publishing milestones to Redis Pub/Sub
 │   ├── service/                    # Core application logic

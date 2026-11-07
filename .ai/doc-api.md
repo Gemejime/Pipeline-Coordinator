@@ -206,6 +206,7 @@ option go_package = "rag-ingestion-coordinator/api/proto/v1;coordinatorv1";
 
 service CoordinatorService {
   rpc CreateUploadURL(CreateUploadURLRequest) returns (CreateUploadURLResponse);
+  rpc CompleteUploadURL(CompleteMultipartUploadRequest) returns (CompleteMultipartUploadResponse);
   rpc StartIngestion(StartIngestionRequest) returns (StartIngestionResponse);
   rpc GetIngestionStatus(GetIngestionStatusRequest) returns (GetIngestionStatusResponse);
 }
@@ -218,6 +219,11 @@ message CreateUploadURLRequest {
   string content_hash = 5;
 }
 
+message PresignedPart {
+  int32 part_number = 1;
+  string presigned_url = 2;
+}
+
 message CreateUploadURLResponse {
   string upload_id = 1;
   string tenant_id = 2;
@@ -226,6 +232,28 @@ message CreateUploadURLResponse {
   string presigned_url = 5;
   int64 expires_at_unix = 6;
   int32 lease_seconds = 7;
+  int64 part_size_bytes = 8;
+  repeated PresignedPart parts = 9;
+}
+
+message CompletedPart {
+  int32 part_number = 1;
+  string etag = 2;
+}
+
+message CompleteMultipartUploadRequest {
+  string upload_id = 1;
+  string tenant_id = 2;
+  string s3_bucket = 3;
+  string s3_key = 4;
+  repeated CompletedPart parts = 5;
+}
+
+message CompleteMultipartUploadResponse {
+  string upload_id = 1;
+  string status = 2;
+  string s3_location = 3;
+  string completed_at = 4; // RFC 3339 / ISO-8601 UTC timestamp
 }
 
 message StartIngestionRequest {
@@ -266,7 +294,7 @@ message GetIngestionStatusResponse {
 }
 ```
 
-### Shared Domain Payloads (`api/proto/v1/types.proto`)
+### Shared Domain & Polyglot Activity Payloads (`api/proto/v1/types.proto`)
 
 ```protobuf
 syntax = "proto3";
@@ -334,17 +362,122 @@ message ProgressMilestoneEvent {
   int32 total_slices = 10;
   int64 timestamp_unix = 11;
 }
+
+// Polyglot Activity Contracts across Go and Python Workers
+
+message InspectDocumentRequest {
+  string tenant_id = 1;
+  string document_id = 2;
+  string s3_bucket = 3;
+  string s3_key = 4;
+  string content_hash = 5;
+  int64 total_bytes = 6;
+  string mime_type = 7;
+}
+
+message InspectDocumentResponse {
+  MultimodalModality modality = 1;
+  int32 total_pages = 2;
+  double duration_seconds = 3;
+  int32 recommended_slice_pages = 4;
+  double recommended_window_seconds = 5;
+}
+
+message PresignSliceArtifactRequest {
+  PartitionSlice slice = 1;
+  int32 lease_seconds = 2;
+}
+
+message PresignSliceArtifactResponse {
+  string s3_bucket = 1;
+  string s3_input_key = 2;
+  string s3_output_parquet_key = 3;
+  string presigned_input_get_url = 4;    // Redacted in logs
+  string presigned_output_put_url = 5;   // Redacted in logs
+  int64 expires_at_unix = 6;
+}
+
+message ExtractSegmentRequest {
+  PartitionSlice slice = 1;
+  string presigned_input_get_url = 2;    // Redacted in logs
+  string presigned_output_put_url = 3;   // Redacted in logs
+  PipelineConfig pipeline_config = 4;
+}
+
+message ExtractSegmentResponse {
+  string slice_id = 1;
+  int32 slice_index = 2;
+  string s3_output_bucket = 3;
+  string s3_output_parquet_key = 4;
+  int32 extracted_pages = 5;
+  int32 extracted_segments = 6;
+  int64 parquet_bytes = 7;
+}
+
+message CompileChunksRequest {
+  PartitionSlice slice = 1;
+  string s3_output_bucket = 2;
+  string s3_output_parquet_key = 3;
+  PipelineConfig pipeline_config = 4;
+}
+
+message CompileChunksResponse {
+  string slice_id = 1;
+  int32 slice_index = 2;
+  int32 compiled_chunks = 3;
+  int32 total_tokens = 4;
+}
+
+message PublishMilestoneRequest {
+  ProgressMilestoneEvent event = 1;
+}
+
+message PublishMilestoneResponse {
+  string channel = 1;
+  int64 sequence_number = 2;
+  bool published = 3;
+}
+
+message CatalogTerminalRunRequest {
+  string workflow_id = 1;
+  string run_id = 2;
+  string tenant_id = 3;
+  string document_id = 4;
+  string content_hash = 5;
+  string status = 6; // COMPLETED, FAILED, TERMINATED
+  int32 total_pages = 7;
+  int32 total_slices = 8;
+  int32 completed_slices = 9;
+  int32 failed_slices = 10;
+  double duration_seconds = 11;
+  string error_message = 12;
+}
+
+message CatalogTerminalRunResponse {
+  string record_id = 1;
+  bool persisted = 2;
+}
 ```
 
 ---
 
 ## 3. Temporal Workflow & Activity Signatures
 
-### Workflows (`internal/workflow/`)
+### Workflows, Queries & Search Attributes (`internal/workflow/`)
 
 ```go
+// QueryTypeIngestionStatus is the Temporal query handler name for in-flight status inspection (ADR-003).
+const QueryTypeIngestionStatus = "ingestion_status"
+
+// Typed Temporal Search Attributes enabled on the cluster:
+// - TenantID (Keyword)
+// - DocumentID (Keyword)
+// - PipelineRunID (Keyword)
+
 // IngestionCoordinatorWorkflow orchestrates the end-to-end ingestion DAG.
-// It executes inspection, plans slice manifests, and fans out child workflows.
+// It executes inspection, plans slice manifests, fans out child workflows in bounded
+// batches (<=100 slices per generation with ContinueAsNew), isolates poison-pill
+// slice failures (Runbook 3), and persists a single terminal catalog record (ADR-003).
 func IngestionCoordinatorWorkflow(ctx workflow.Context, req IngestionRequest) (*IngestionResult, error)
 
 // DocumentPartitionWorkflow executes the per-slice activity chain in isolation
@@ -357,11 +490,11 @@ func DocumentPartitionWorkflow(ctx workflow.Context, slice PartitionSlice) (*Par
 | Activity | Task Queue | Description | Heartbeat Cadence |
 | :--- | :--- | :--- | :--- |
 | `InspectDocumentHeaderActivity` | `inspection-queue` | Performs random-access byte inspection on S3 objects to read page counts and layout metadata | 10s |
-| `PresignS3ArtifactActivity` | Go Coordinator | Generates presigned URLs for child worker artifact emission | N/A (<50ms) |
-| `DispatchDocAIExtractActivity` | `doc-ai-task-queue` | Polled by Python Doc AI workers for layout parsing, OCR, and chunking | 15s |
-| `CompileChunksActivity` | `chunk-lifecycle-queue` | Polled by `rag-chunk-lifecycle-service` to build chunk trees | 10s |
-| `PublishMilestoneActivity` | Go Coordinator | Publishes stage transition events to Redis Pub/Sub | N/A (<20ms) |
-| `CatalogTerminalRunActivity` | Go Coordinator | Writes final `COMPLETED` or `FAILED` record to PostgreSQL | N/A (Atomic write) |
+| `PresignS3ArtifactActivity` | `coordinator-task-queue` | Generates 15-minute presigned URLs for child worker input range reading and Parquet emission | N/A (<50ms) |
+| `DispatchDocAIExtractActivity` | `doc-ai-task-queue` | Polled by Python Doc AI workers for layout parsing, OCR, ASR, and Parquet slice emission | 15s |
+| `CompileChunksActivity` | `chunk-lifecycle-queue` | Polled by `rag-chunk-lifecycle-service` to build parent-child chunk trees from Parquet slices | 10s |
+| `PublishMilestoneActivity` | `coordinator-task-queue` | Publishes stage transition events with monotonic `sequence_number` to Redis Pub/Sub | N/A (<20ms) |
+| `CatalogTerminalRunActivity` | `coordinator-task-queue` | Writes final atomic `COMPLETED`, `FAILED`, or `TERMINATED` record to PostgreSQL | N/A (Atomic write) |
 
 ---
 
@@ -391,6 +524,8 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     status VARCHAR(32) NOT NULL, -- 'COMPLETED', 'FAILED', 'TERMINATED'
     total_pages INT NOT NULL DEFAULT 0,
     total_slices INT NOT NULL DEFAULT 0,
+    completed_slices INT NOT NULL DEFAULT 0,
+    failed_slices INT NOT NULL DEFAULT 0,
     duration_seconds DOUBLE PRECISION NOT NULL DEFAULT 0.0,
     error_message TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

@@ -1,0 +1,95 @@
+syntax = "proto3";
+
+package rag.coordinator.v1;
+
+option go_package = "rag-ingestion-coordinator/api/proto/v1;coordinatorv1";
+
+service CoordinatorService {
+  rpc CreateUploadURL(CreateUploadURLRequest) returns (CreateUploadURLResponse);
+  rpc CompleteUploadURL(CompleteMultipartUploadRequest) returns (CompleteMultipartUploadResponse);
+  rpc StartIngestion(StartIngestionRequest) returns (StartIngestionResponse);
+  rpc GetIngestionStatus(GetIngestionStatusRequest) returns (GetIngestionStatusResponse);
+}
+
+message CreateUploadURLRequest {
+  string tenant_id = 1;
+  string filename = 2;
+  string content_type = 3;
+  int64 content_length_bytes = 4;
+  string content_hash = 5;
+}
+
+message PresignedPart {
+  int32 part_number = 1;
+  string presigned_url = 2;
+}
+
+message CreateUploadURLResponse {
+  string upload_id = 1;
+  string tenant_id = 2;
+  string s3_bucket = 3;
+  string s3_key = 4;
+  string presigned_url = 5;
+  int64 expires_at_unix = 6;
+  int32 lease_seconds = 7;
+  int64 part_size_bytes = 8;
+  repeated PresignedPart parts = 9;
+}
+
+message CompletedPart {
+  int32 part_number = 1;
+  string etag = 2;
+}
+
+message CompleteMultipartUploadRequest {
+  string upload_id = 1;
+  string tenant_id = 2;
+  string s3_bucket = 3;
+  string s3_key = 4;
+  repeated CompletedPart parts = 5;
+}
+
+message CompleteMultipartUploadResponse {
+  string upload_id = 1;
+  string status = 2;
+  string s3_location = 3;
+  string completed_at = 4; // RFC 3339 / ISO-8601 UTC timestamp
+}
+
+message StartIngestionRequest {
+  string tenant_id = 1;
+  string document_id = 2;
+  string s3_bucket = 3;
+  string s3_key = 4;
+  string content_hash = 5;
+  int64 total_bytes = 6;
+  string mime_type = 7;
+  string pipeline_config_id = 8;
+}
+
+message StartIngestionResponse {
+  string workflow_id = 1;
+  string run_id = 2;
+  string status = 3;
+  int64 started_at_unix = 4;
+}
+
+message GetIngestionStatusRequest {
+  string workflow_id = 1;
+  string tenant_id = 2;
+}
+
+message GetIngestionStatusResponse {
+  string workflow_id = 1;
+  string run_id = 2;
+  string tenant_id = 3;
+  string status = 4;
+  int32 total_slices = 5;
+  int32 completed_slices = 6;
+  int32 failed_slices = 7;
+  int32 total_pages = 8;
+  double duration_seconds = 9;
+  string created_at = 10;   // RFC 3339 / ISO-8601 UTC timestamp
+  string completed_at = 11; // RFC 3339 / ISO-8601 UTC timestamp
+}
+

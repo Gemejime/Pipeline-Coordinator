@@ -1,0 +1,161 @@
+syntax = "proto3";
+
+package rag.coordinator.v1;
+
+option go_package = "rag-ingestion-coordinator/api/proto/v1;coordinatorv1";
+
+enum MultimodalModality {
+  MULTIMODAL_MODALITY_UNSPECIFIED = 0;
+  MULTIMODAL_MODALITY_DOCUMENT_PDF = 1;
+  MULTIMODAL_MODALITY_AUDIO = 2;
+  MULTIMODAL_MODALITY_VIDEO = 3;
+  MULTIMODAL_MODALITY_TABULAR = 4;
+}
+
+message PartitionSlice {
+  string slice_id = 1;
+  int32 slice_index = 2;
+  int32 total_slices = 3;
+  string tenant_id = 4;
+  string document_id = 5;
+  string content_hash = 6;
+  string s3_input_bucket = 7;
+  string s3_input_key = 8;
+  string s3_output_parquet_key = 9;
+  MultimodalModality modality = 10;
+  int32 start_page = 11;
+  int32 end_page = 12;
+  double start_time_seconds = 13;
+  double end_time_seconds = 14;
+  double overlap_seconds = 15;
+}
+
+// HeartbeatDetails represents the native Temporal activity heartbeat payload (ADR-003)
+message HeartbeatDetails {
+  string slice_id = 1;
+  int32 slice_index = 2;
+  int32 last_processed_unit = 3; // e.g. last page number or seconds offset
+  int32 processed_units = 4;
+  int32 total_units = 5;
+  string intermediate_s3_key = 6;
+  int64 updated_at_unix = 7;
+}
+
+message PipelineConfig {
+  string id = 1;
+  string tenant_id = 2;
+  string name = 3;
+  int32 chunk_size_tokens = 4;
+  int32 chunk_overlap_tokens = 5;
+  bool ocr_enabled = 6;
+}
+
+message ProgressMilestoneEvent {
+  string event_id = 1;
+  int64 sequence_number = 2;
+  string tenant_id = 3;
+  string document_id = 4;
+  string workflow_id = 5;
+  string stage = 6;
+  string status = 7;
+  double progress_pct = 8;
+  int32 slices_completed = 9;
+  int32 total_slices = 10;
+  int64 timestamp_unix = 11;
+}
+
+// Polyglot Activity Contracts across Go and Python Workers
+
+message InspectDocumentRequest {
+  string tenant_id = 1;
+  string document_id = 2;
+  string s3_bucket = 3;
+  string s3_key = 4;
+  string content_hash = 5;
+  int64 total_bytes = 6;
+  string mime_type = 7;
+}
+
+message InspectDocumentResponse {
+  MultimodalModality modality = 1;
+  int32 total_pages = 2;
+  double duration_seconds = 3;
+  int32 recommended_slice_pages = 4;
+  double recommended_window_seconds = 5;
+}
+
+message PresignSliceArtifactRequest {
+  PartitionSlice slice = 1;
+  int32 lease_seconds = 2;
+}
+
+message PresignSliceArtifactResponse {
+  string s3_bucket = 1;
+  string s3_input_key = 2;
+  string s3_output_parquet_key = 3;
+  string presigned_input_get_url = 4;    // Redacted in logs
+  string presigned_output_put_url = 5;   // Redacted in logs
+  int64 expires_at_unix = 6;
+}
+
+message ExtractSegmentRequest {
+  PartitionSlice slice = 1;
+  string presigned_input_get_url = 2;    // Redacted in logs
+  string presigned_output_put_url = 3;   // Redacted in logs
+  PipelineConfig pipeline_config = 4;
+}
+
+message ExtractSegmentResponse {
+  string slice_id = 1;
+  int32 slice_index = 2;
+  string s3_output_bucket = 3;
+  string s3_output_parquet_key = 4;
+  int32 extracted_pages = 5;
+  int32 extracted_segments = 6;
+  int64 parquet_bytes = 7;
+}
+
+message CompileChunksRequest {
+  PartitionSlice slice = 1;
+  string s3_output_bucket = 2;
+  string s3_output_parquet_key = 3;
+  PipelineConfig pipeline_config = 4;
+}
+
+message CompileChunksResponse {
+  string slice_id = 1;
+  int32 slice_index = 2;
+  int32 compiled_chunks = 3;
+  int32 total_tokens = 4;
+}
+
+message PublishMilestoneRequest {
+  ProgressMilestoneEvent event = 1;
+}
+
+message PublishMilestoneResponse {
+  string channel = 1;
+  int64 sequence_number = 2;
+  bool published = 3;
+}
+
+message CatalogTerminalRunRequest {
+  string workflow_id = 1;
+  string run_id = 2;
+  string tenant_id = 3;
+  string document_id = 4;
+  string content_hash = 5;
+  string status = 6; // COMPLETED, FAILED, TERMINATED
+  int32 total_pages = 7;
+  int32 total_slices = 8;
+  int32 completed_slices = 9;
+  int32 failed_slices = 10;
+  double duration_seconds = 11;
+  string error_message = 12;
+}
+
+message CatalogTerminalRunResponse {
+  string record_id = 1;
+  bool persisted = 2;
+}
+
