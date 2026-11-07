@@ -24,7 +24,7 @@ CONTROL PLANE (Stateless & Orchestration)
 ┌───────────────────────────────────────────────────────────────────────────────────────────────┐
 │                                       Temporal Cluster                                        │
 │ - Orchestrates Root Ingestion Workflow & Child Workflows                                     │
-│ - Manages Task Queues: [inspection-queue], [doc-ai-queue], [chunk-lifecycle-queue]            │
+│ - Manages Task Queues: [inspection-queue], [doc-ai-task-queue], [chunk-lifecycle-queue]       │
 │ - Tracks Heartbeat Details & Checkpoints natively (Zero Dual-Writes)                          │
 └───────┬───────────────────────────────┬───────────────────────────────┬───────────────────────┘
         │ Task: Inspect & Manifest      │ Task: Extract Segment         │ Task: Compile Chunks
@@ -70,7 +70,7 @@ CONTROL PLANE (Stateless & Orchestration)
 ## Scope & Exclusions
 
 ### In-Scope
-- **Upload Coordination**: Tenant authentication pass-through, payload validation, and presigned S3 upload URI generation with cryptographically secure expiration policies (AWS STS, 15-minute lease).
+- **Upload Coordination**: Tenant authentication pass-through, payload validation, and presigned S3 upload URI generation with cryptographically secure expiration policies (AWS STS, 15-minute lease), supporting both single-part and multipart upload handoffs for payloads up to $10\text{ GB}$.
 - **Workflow Root Scheduling**: Starting `IngestionCoordinatorWorkflow` instances and registering pipeline metadata in PostgreSQL.
 - **Child Workflow Fan-Out**: Spawning parallel `DocumentPartitionWorkflow` instances across pre-calculated slice intervals via `manifest_planner`.
 - **Telemetry Emission**: Emitting structured progress frames to Redis Pub/Sub for down-funnel consumption by API gateways and notification dispatchers.

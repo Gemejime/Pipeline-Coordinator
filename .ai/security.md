@@ -14,7 +14,7 @@
 
 1. **Short-Lived Presigned S3 URLs**:
    - Presigned upload and download URLs are issued via AWS STS / S3 Presign Client with a maximum lease of **15 minutes** ($900\text{ seconds}$).
-   - Permissions are restricted strictly to `s3:PutObject` for upload targets and `s3:GetObject` for slice reading.
+   - Permissions are restricted strictly to `s3:PutObject` (and multipart upload actions `s3:AbortMultipartUpload`, `s3:ListMultipartUploadParts`) for upload targets and `s3:GetObject` for slice reading.
 2. **Deterministic Artifact Namespaces**:
    - Worker artifact paths enforce deterministic content-addressed naming conventions:
      `s3://<bucket>/artifacts/<tenant_id>/<doc_hash>/slice_<start>_<end>.parquet`

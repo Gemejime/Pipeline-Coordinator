@@ -37,6 +37,31 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /v1/ingest/upload-url/complete:
+    post:
+      summary: Complete Multipart S3 Upload
+      description: Finalizes an S3 multipart upload with the client-submitted part ETags.
+      operationId: completeUploadURL
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompleteMultipartUploadRequest'
+      responses:
+        '200':
+          description: Multipart upload completed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompleteMultipartUploadResponse'
+        '400':
+          description: Bad part manifest or missing parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
   /v1/ingest/workflows/start:
     post:
       summary: Start Ingestion Workflow
@@ -192,7 +217,6 @@ components:
         - tenant_id
         - s3_bucket
         - s3_key
-        - presigned_url
         - expires_at
         - lease_seconds
       properties:
@@ -211,7 +235,16 @@ components:
         presigned_url:
           type: string
           format: uri
-          description: Pre-authenticated S3 upload URL (Redacted in logs)
+          description: Pre-authenticated S3 upload URL for single-part uploads (Redacted in logs)
+        part_size_bytes:
+          type: integer
+          format: int64
+          example: 104857600
+        parts:
+          type: array
+          description: Presigned part URLs for multipart uploads (files >100MB up to 10GB)
+          items:
+            $ref: '#/components/schemas/PresignedPart'
         expires_at:
           type: string
           format: date-time
@@ -219,6 +252,81 @@ components:
         lease_seconds:
           type: integer
           example: 900
+
+    PresignedPart:
+      type: object
+      required:
+        - part_number
+        - presigned_url
+      properties:
+        part_number:
+          type: integer
+          example: 1
+        presigned_url:
+          type: string
+          format: uri
+          description: Presigned upload URL for this specific part
+
+    CompleteMultipartUploadRequest:
+      type: object
+      required:
+        - upload_id
+        - tenant_id
+        - s3_bucket
+        - s3_key
+        - parts
+      properties:
+        upload_id:
+          type: string
+          example: mp_upload_01HXYZ1234567890ABCDEF
+        tenant_id:
+          type: string
+          example: tenant-corp-01
+        s3_bucket:
+          type: string
+          example: rag-ingestion-bucket
+        s3_key:
+          type: string
+          example: raw/tenant-corp-01/hash/quarterly_report.pdf
+        parts:
+          type: array
+          items:
+            $ref: '#/components/schemas/CompletedPart'
+
+    CompletedPart:
+      type: object
+      required:
+        - part_number
+        - etag
+      properties:
+        part_number:
+          type: integer
+          example: 1
+        etag:
+          type: string
+          example: "\"d41d8cd98f00b204e9800998ecf8427e\""
+
+    CompleteMultipartUploadResponse:
+      type: object
+      required:
+        - upload_id
+        - status
+        - s3_location
+        - completed_at
+      properties:
+        upload_id:
+          type: string
+          example: mp_upload_01HXYZ1234567890ABCDEF
+        status:
+          type: string
+          example: COMPLETED
+        s3_location:
+          type: string
+          example: s3://rag-ingestion-bucket/raw/tenant-corp-01/hash/quarterly_report.pdf
+        completed_at:
+          type: string
+          format: date-time
+          example: 2026-11-07T08:30:00Z
 
     StartIngestionRequest:
       type: object

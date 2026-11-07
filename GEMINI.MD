@@ -24,7 +24,7 @@ The `rag-ingestion-coordinator` is the authoritative Go-based control plane micr
 - **Control Plane Only**: Pure workflow orchestration without buffering, parsing, or streaming binary payloads or columnar Arrow buffers through the coordinator process.
 - **Zero-Heap Ingestion**: Strict $<256\text{ MiB}$ RSS memory ceiling per pod regardless of upload size (up to $10\text{ GB}$).
 - **Temporal Workflow DAGs**: Manages root `IngestionCoordinatorWorkflow` and fans out child `DocumentPartitionWorkflow` executions to prevent event history exhaustion ($<10,000$ events).
-- **Polyglot Task Queues**: Coordinates `inspection-queue` (Go/Python byte inspection), `doc-ai-queue` (Python Docling/OCR/ASR), and `chunk-lifecycle-queue` (Go chunk compilation).
+- **Polyglot Task Queues**: Coordinates `inspection-queue` (Go/Python byte inspection), `doc-ai-task-queue` (Python Docling/OCR/ASR), and `chunk-lifecycle-queue` (Go chunk compilation).
 - **Zero Dual-Writes (ADR-003)**: In-flight execution progress is tracked natively via Temporal heartbeat details; writes to PostgreSQL only at pipeline boundaries (`COMPLETED` or `FAILED`).
 - **Real-Time Telemetry**: Publishes pipeline milestone events asynchronously via Redis Pub/Sub (`ingestion:events:<tenant_id>`).
 

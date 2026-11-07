@@ -15,7 +15,7 @@ The `rag-ingestion-coordinator` operates as the control-plane brain of the multi
    - Decomposes large multi-page or continuous media payloads into bounded slice manifests (e.g. 50–100 page ranges for PDFs, 10–15 minute sliding windows for media).
 3. **Temporal DAG Workflow Orchestration**:
    - Orchestrates root `IngestionCoordinatorWorkflow` and fans out isolated `DocumentPartitionWorkflow` child workflows to guarantee Temporal history event boundaries ($<10,000$ events).
-   - Coordinates polyglot task queues: `inspection-queue` (Go/Python byte inspection), `doc-ai-queue` (Python Docling/OCR/ASR), and `chunk-lifecycle-queue` (Go chunk compilation).
+   - Coordinates polyglot task queues: `inspection-queue` (Go/Python byte inspection), `doc-ai-task-queue` (Python Docling/OCR/ASR), and `chunk-lifecycle-queue` (Go chunk compilation).
 4. **Single Source of Truth for State (Zero Dual-Writes - ADR-003)**:
    - In-flight execution checkpoints rely solely on native Temporal workflow state and heartbeat payload details.
    - Writes to PostgreSQL only at pipeline terminal boundaries (`COMPLETED` or `FAILED`).
