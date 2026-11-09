@@ -28,6 +28,8 @@ message PartitionSlice {
   double start_time_seconds = 13;
   double end_time_seconds = 14;
   double overlap_seconds = 15;
+  string pipeline_config_id = 16;
+  PipelineConfig pipeline_config = 17;
 }
 
 // HeartbeatDetails represents the native Temporal activity heartbeat payload (ADR-003)

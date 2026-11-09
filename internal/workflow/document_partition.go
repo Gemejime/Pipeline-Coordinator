@@ -1,12 +1,25 @@
 package workflow
 
 import (
+	"errors"
 	"fmt"
+	"strings"
+	"time"
 
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
 	coordinatorv1 "rag-ingestion-coordinator/api/proto/v1"
 	"rag-ingestion-coordinator/internal/activity"
+)
+
+const (
+	// DefaultPipelineConfigID is the fallback pipeline configuration identifier when none is specified.
+	DefaultPipelineConfigID = "default-multimodal-v1"
+	// DefaultChunkSizeTokens is the fallback token target per chunk when unset.
+	DefaultChunkSizeTokens int32 = 300
+	// DefaultChunkOverlapTokens is the fallback token overlap between adjacent chunks when unset.
+	DefaultChunkOverlapTokens int32 = 50
 )
 
 // PartitionSlice aliases the shared Protobuf PartitionSlice message.
@@ -25,14 +38,56 @@ type PartitionResult struct {
 	TotalTokens        int32  `json:"total_tokens"`
 }
 
+// ResolvePipelineConfig resolves the effective PipelineConfig for a slice from the caller-supplied
+// PipelineConfig or PipelineConfigID, applying defaults only for omitted fields.
+func ResolvePipelineConfig(
+	tenantID string,
+	pipelineConfigID string,
+	cfg *coordinatorv1.PipelineConfig,
+) coordinatorv1.PipelineConfig {
+	resolved := coordinatorv1.PipelineConfig{
+		ID:                 DefaultPipelineConfigID,
+		TenantID:           tenantID,
+		ChunkSizeTokens:    DefaultChunkSizeTokens,
+		ChunkOverlapTokens: DefaultChunkOverlapTokens,
+		OCREnabled:         true,
+	}
+
+	if trimmedID := strings.TrimSpace(pipelineConfigID); trimmedID != "" {
+		resolved.ID = trimmedID
+	}
+
+	if cfg != nil {
+		resolved.OCREnabled = cfg.OCREnabled
+		if trimmedID := strings.TrimSpace(cfg.ID); trimmedID != "" {
+			resolved.ID = trimmedID
+		}
+		if trimmedTenant := strings.TrimSpace(cfg.TenantID); trimmedTenant != "" {
+			resolved.TenantID = trimmedTenant
+		}
+		if trimmedName := strings.TrimSpace(cfg.Name); trimmedName != "" {
+			resolved.Name = trimmedName
+		}
+		if cfg.ChunkSizeTokens > 0 {
+			resolved.ChunkSizeTokens = cfg.ChunkSizeTokens
+		}
+		if cfg.ChunkOverlapTokens >= 0 && (cfg.ChunkOverlapTokens > 0 || cfg.ChunkSizeTokens > 0) {
+			resolved.ChunkOverlapTokens = cfg.ChunkOverlapTokens
+		}
+	}
+
+	return resolved
+}
+
 // DocumentPartitionWorkflow executes the per-slice ingestion pipeline in an isolated
 // child workflow execution to prevent Temporal event history exhaustion (ADR-002):
 //  1. PresignS3ArtifactActivity on coordinator-task-queue (15-min lease)
-//  2. DispatchDocAIExtractActivity on doc-ai-task-queue (15s heartbeat timeout)
+//  2. DispatchDocAIExtractActivity on doc-ai-task-queue (15s heartbeat timeout), re-presigning on retry
 //  3. CompileChunksActivity on chunk-lifecycle-queue (10s heartbeat timeout)
 func DocumentPartitionWorkflow(ctx workflow.Context, slice PartitionSlice) (*PartitionResult, error) {
 	info := workflow.GetInfo(ctx)
 	logger := workflow.GetLogger(ctx)
+	pipelineConfig := ResolvePipelineConfig(slice.TenantID, slice.PipelineConfigID, slice.PipelineConfig)
 
 	logger.Info("starting child document partition workflow",
 		"tenant_id", slice.TenantID,
@@ -42,82 +97,102 @@ func DocumentPartitionWorkflow(ctx workflow.Context, slice PartitionSlice) (*Par
 		"slice_index", slice.SliceIndex,
 		"s3_bucket", slice.S3InputBucket,
 		"s3_key", slice.S3OutputParquetKey,
+		"pipeline_config_id", pipelineConfig.ID,
 	)
 
-	// Step 1: Issue 15-minute presigned GET/PUT URLs on coordinator-task-queue.
 	presignCtx := workflow.WithActivityOptions(ctx, CoordinatorActivityOptions())
-	var presignResp coordinatorv1.PresignSliceArtifactResponse
-	err := workflow.ExecuteActivity(
-		presignCtx,
-		activity.PresignS3ArtifactActivity,
-		coordinatorv1.PresignSliceArtifactRequest{
-			Slice:        slice,
-			LeaseSeconds: activity.DefaultPresignLeaseSeconds,
-		},
-	).Get(presignCtx, &presignResp)
-	if err != nil {
-		logger.Error("failed to presign S3 slice artifacts",
-			"tenant_id", slice.TenantID,
-			"document_id", slice.DocumentID,
-			"workflow_id", info.WorkflowExecution.ID,
-			"slice_id", slice.SliceID,
-			"s3_bucket", slice.S3InputBucket,
-			"s3_key", slice.S3OutputParquetKey,
-			"error", err,
-		)
-		return nil, fmt.Errorf("presign slice %s failed: %w", slice.SliceID, err)
+	extractCtx := workflow.WithActivityOptions(ctx, DocAIActivityOptions())
+	computeRetry := DefaultComputeRetryPolicy()
+	maxAttempts := computeRetry.MaximumAttempts
+	if maxAttempts < 1 {
+		maxAttempts = 1
 	}
 
-	// Step 2: Dispatch extraction to Python Document AI workers on doc-ai-task-queue.
-	// Note: Raw presigned URLs in presignResp are never logged.
-	extractCtx := workflow.WithActivityOptions(ctx, DocAIActivityOptions())
 	var extractResp coordinatorv1.ExtractSegmentResponse
-	err = workflow.ExecuteActivity(
-		extractCtx,
-		activity.DispatchDocAIExtractActivity,
-		coordinatorv1.ExtractSegmentRequest{
-			Slice:                 slice,
-			PresignedInputGetURL:  presignResp.PresignedInputGetURL,
-			PresignedOutputPutURL: presignResp.PresignedOutputPutURL,
-			PipelineConfig: coordinatorv1.PipelineConfig{
-				ID:                 "default-multimodal-v1",
-				TenantID:           slice.TenantID,
-				ChunkSizeTokens:    300,
-				ChunkOverlapTokens: 50,
-				OCREnabled:         true,
+	for attempt := int32(1); attempt <= maxAttempts; attempt++ {
+		// Step 1: Issue fresh 15-minute presigned GET/PUT URLs before every extraction attempt
+		// so retries never reuse expired S3 URLs.
+		var presignResp coordinatorv1.PresignSliceArtifactResponse
+		err := workflow.ExecuteActivity(
+			presignCtx,
+			activity.PresignS3ArtifactActivity,
+			coordinatorv1.PresignSliceArtifactRequest{
+				Slice:        slice,
+				LeaseSeconds: activity.DefaultPresignLeaseSeconds,
 			},
-		},
-	).Get(extractCtx, &extractResp)
-	if err != nil {
-		logger.Error("failed DocAI segment extraction",
+		).Get(presignCtx, &presignResp)
+		if err != nil {
+			logger.Error("failed to presign S3 slice artifacts",
+				"tenant_id", slice.TenantID,
+				"document_id", slice.DocumentID,
+				"workflow_id", info.WorkflowExecution.ID,
+				"slice_id", slice.SliceID,
+				"s3_bucket", slice.S3InputBucket,
+				"s3_key", slice.S3OutputParquetKey,
+				"attempt", attempt,
+				"error", err,
+			)
+			return nil, fmt.Errorf("presign slice %s failed: %w", slice.SliceID, err)
+		}
+
+		// Step 2: Dispatch extraction to Python Document AI workers on doc-ai-task-queue.
+		// Note: Raw presigned URLs in presignResp are never logged.
+		err = workflow.ExecuteActivity(
+			extractCtx,
+			activity.DispatchDocAIExtractActivity,
+			coordinatorv1.ExtractSegmentRequest{
+				Slice:                 slice,
+				PresignedInputGetURL:  presignResp.PresignedInputGetURL,
+				PresignedOutputPutURL: presignResp.PresignedOutputPutURL,
+				PipelineConfig:        pipelineConfig,
+			},
+		).Get(extractCtx, &extractResp)
+		if err == nil {
+			break
+		}
+
+		if attempt >= maxAttempts || isNonRetryableExtractError(ctx, err, computeRetry.NonRetryableErrorTypes) {
+			logger.Error("failed DocAI segment extraction",
+				"tenant_id", slice.TenantID,
+				"document_id", slice.DocumentID,
+				"workflow_id", info.WorkflowExecution.ID,
+				"slice_id", slice.SliceID,
+				"s3_bucket", slice.S3InputBucket,
+				"s3_key", slice.S3OutputParquetKey,
+				"attempt", attempt,
+				"error", err,
+			)
+			return nil, fmt.Errorf("extract slice %s failed: %w", slice.SliceID, err)
+		}
+
+		backoff := computeRetryBackoff(attempt, computeRetry)
+		logger.Warn("retrying DocAI segment extraction with fresh presigned URLs",
 			"tenant_id", slice.TenantID,
 			"document_id", slice.DocumentID,
 			"workflow_id", info.WorkflowExecution.ID,
 			"slice_id", slice.SliceID,
 			"s3_bucket", slice.S3InputBucket,
 			"s3_key", slice.S3OutputParquetKey,
+			"attempt", attempt,
+			"backoff_ms", backoff.Milliseconds(),
 			"error", err,
 		)
-		return nil, fmt.Errorf("extract slice %s failed: %w", slice.SliceID, err)
+		if sleepErr := workflow.Sleep(ctx, backoff); sleepErr != nil {
+			return nil, fmt.Errorf("extract slice %s canceled during retry backoff: %w", slice.SliceID, sleepErr)
+		}
 	}
 
 	// Step 3: Compile parent-child chunks on chunk-lifecycle-queue.
 	compileCtx := workflow.WithActivityOptions(ctx, ChunkLifecycleActivityOptions())
 	var compileResp coordinatorv1.CompileChunksResponse
-	err = workflow.ExecuteActivity(
+	err := workflow.ExecuteActivity(
 		compileCtx,
 		activity.CompileChunksActivity,
 		coordinatorv1.CompileChunksRequest{
 			Slice:              slice,
 			S3OutputBucket:     extractResp.S3OutputBucket,
 			S3OutputParquetKey: extractResp.S3OutputParquetKey,
-			PipelineConfig: coordinatorv1.PipelineConfig{
-				ID:                 "default-multimodal-v1",
-				TenantID:           slice.TenantID,
-				ChunkSizeTokens:    300,
-				ChunkOverlapTokens: 50,
-				OCREnabled:         true,
-			},
+			PipelineConfig:     pipelineConfig,
 		},
 	).Get(compileCtx, &compileResp)
 	if err != nil {
@@ -155,4 +230,53 @@ func DocumentPartitionWorkflow(ctx workflow.Context, slice PartitionSlice) (*Par
 		CompiledChunks:     compileResp.CompiledChunks,
 		TotalTokens:        compileResp.TotalTokens,
 	}, nil
+}
+
+// isNonRetryableExtractError determines whether an extraction error should abort workflow-level retries immediately.
+func isNonRetryableExtractError(ctx workflow.Context, err error, nonRetryableTypes []string) bool {
+	if temporal.IsCanceledError(err) || errors.Is(ctx.Err(), workflow.ErrCanceled) {
+		return true
+	}
+	var appErr *temporal.ApplicationError
+	if errors.As(err, &appErr) {
+		if appErr.NonRetryable() {
+			return true
+		}
+		errType := appErr.Type()
+		for _, nonRetryable := range nonRetryableTypes {
+			if errType == nonRetryable {
+				return true
+			}
+		}
+	}
+	errMsg := err.Error()
+	for _, nonRetryable := range nonRetryableTypes {
+		if strings.Contains(errMsg, nonRetryable) {
+			return true
+		}
+	}
+	return false
+}
+
+// computeRetryBackoff calculates the bounded exponential backoff interval for the given 1-based attempt number.
+func computeRetryBackoff(attempt int32, policy *temporal.RetryPolicy) time.Duration {
+	if policy == nil || policy.InitialInterval <= 0 {
+		return 2 * time.Second
+	}
+	backoff := float64(policy.InitialInterval)
+	coeff := policy.BackoffCoefficient
+	if coeff < 1.0 {
+		coeff = 2.0
+	}
+	for i := int32(1); i < attempt; i++ {
+		backoff *= coeff
+		if policy.MaximumInterval > 0 && time.Duration(backoff) >= policy.MaximumInterval {
+			return policy.MaximumInterval
+		}
+	}
+	d := time.Duration(backoff)
+	if policy.MaximumInterval > 0 && d > policy.MaximumInterval {
+		return policy.MaximumInterval
+	}
+	return d
 }

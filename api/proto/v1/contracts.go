@@ -163,6 +163,8 @@ type PartitionSlice struct {
 	StartTimeSeconds   float64            `json:"start_time_seconds"`
 	EndTimeSeconds     float64            `json:"end_time_seconds"`
 	OverlapSeconds     float64            `json:"overlap_seconds"`
+	PipelineConfigID   string             `json:"pipeline_config_id,omitempty"`
+	PipelineConfig     *PipelineConfig    `json:"pipeline_config,omitempty"`
 }
 
 // HeartbeatDetails represents the native Temporal activity heartbeat checkpoint payload (ADR-003).

@@ -55,7 +55,7 @@ Issues a cryptographically signed, short-lived S3 upload URL for zero-heap clien
   "s3_bucket": "rag-ingestion-bucket",
   "s3_key": "raw/tenant-corp-01/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/annual-report-2026.pdf",
   "presigned_url": "https://rag-ingestion-bucket.s3.amazonaws.com/raw/...?[REDACTED_IN_LOGS]",
-  "expires_at": "2026-11-07T08:35:00Z",
+  "expires_at_unix": 1794040500,
   "lease_seconds": 900
 }
 ```
@@ -77,7 +77,7 @@ Issues a cryptographically signed, short-lived S3 upload URL for zero-heap clien
       "presigned_url": "https://rag-ingestion-bucket.s3.amazonaws.com/raw/...?partNumber=2&[REDACTED_IN_LOGS]"
     }
   ],
-  "expires_at": "2026-11-07T08:35:00Z",
+  "expires_at_unix": 1794040500,
   "lease_seconds": 900
 }
 ```
@@ -147,7 +147,7 @@ Starts an `IngestionCoordinatorWorkflow` instance on Temporal.
   "workflow_id": "ingest-tenant-corp-01-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "run_id": "4b68a85c-197e-4074-a698-c9ceca2ef11d",
   "status": "RUNNING",
-  "started_at": "2026-11-07T08:20:00Z"
+  "started_at_unix": 1794039600
 }
 ```
 
@@ -327,6 +327,8 @@ message PartitionSlice {
   double start_time_seconds = 13;
   double end_time_seconds = 14;
   double overlap_seconds = 15;
+  string pipeline_config_id = 16;
+  PipelineConfig pipeline_config = 17;
 }
 
 // HeartbeatDetails represents the native Temporal activity heartbeat payload (ADR-003)

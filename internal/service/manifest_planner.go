@@ -81,6 +81,7 @@ func PlanSlices(input ManifestPlanInput) ([]PartitionSlice, error) {
 	}
 }
 
+// validateManifestInput validates required identifiers and byte size limits on ManifestPlanInput.
 func validateManifestInput(input ManifestPlanInput) error {
 	if strings.TrimSpace(input.TenantID) == "" {
 		return fmt.Errorf("%w: tenant_id is required", ErrInvalidManifestInput)
@@ -106,6 +107,7 @@ func validateManifestInput(input ManifestPlanInput) error {
 	return nil
 }
 
+// planDocumentPageSlices partitions a document or tabular payload into non-overlapping page slices.
 func planDocumentPageSlices(input ManifestPlanInput) ([]PartitionSlice, error) {
 	if input.TotalPages <= 0 {
 		return nil, fmt.Errorf("%w: total_pages must be >= 1, got %d", ErrCorruptedRange, input.TotalPages)
@@ -162,6 +164,7 @@ func planDocumentPageSlices(input ManifestPlanInput) ([]PartitionSlice, error) {
 	return slices, nil
 }
 
+// planMediaWindowSlices partitions an audio or video payload into sliding time-window slices.
 func planMediaWindowSlices(input ManifestPlanInput) ([]PartitionSlice, error) {
 	if math.IsNaN(input.DurationSeconds) || math.IsInf(input.DurationSeconds, 0) || input.DurationSeconds <= 0 {
 		return nil, fmt.Errorf("%w: duration_seconds must be > 0, got %v", ErrCorruptedRange, input.DurationSeconds)

@@ -2,16 +2,21 @@ package activity
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
+	"go.temporal.io/sdk/worker"
 
 	coordinatorv1 "rag-ingestion-coordinator/api/proto/v1"
 )
 
 const (
+	// CatalogTerminalRunActivityName is the canonical Temporal activity registration name
+	// for terminal run persistence on coordinator-task-queue.
+	CatalogTerminalRunActivityName = "CatalogTerminalRunActivity"
 	// TerminalStatusCompleted indicates all slices (or partial non-fatal slices) finished.
 	TerminalStatusCompleted = "COMPLETED"
 	// TerminalStatusFailed indicates the workflow failed fatally.
@@ -19,6 +24,9 @@ const (
 	// TerminalStatusTerminated indicates the workflow was cancelled or terminated.
 	TerminalStatusTerminated = "TERMINATED"
 )
+
+// ErrNilCatalogStore indicates that CatalogTerminalRun was invoked without a configured TerminalCatalogStore.
+var ErrNilCatalogStore = errors.New("terminal catalog store is not configured")
 
 // TerminalCatalogStore abstracts atomic terminal run persistence in PostgreSQL (ADR-003).
 type TerminalCatalogStore interface {
@@ -35,14 +43,28 @@ func NewCatalogActivities(store TerminalCatalogStore) *CatalogActivities {
 	return &CatalogActivities{Store: store}
 }
 
-// CatalogTerminalRunActivity executes on coordinator-task-queue exclusively at workflow
-// terminal boundaries (COMPLETED, FAILED, TERMINATED) to persist a single atomic record
-// in PostgreSQL without any in-flight dual-writes (ADR-003).
+// Register binds the dependency-backed CatalogTerminalRun activity method under
+// CatalogTerminalRunActivityName on the provided Temporal ActivityRegistry.
+// It returns ErrNilCatalogStore if the receiver or its Store is nil.
+func (a *CatalogActivities) Register(reg worker.ActivityRegistry) error {
+	if a == nil || a.Store == nil {
+		return ErrNilCatalogStore
+	}
+	reg.RegisterActivityWithOptions(
+		a.CatalogTerminalRun,
+		activity.RegisterOptions{Name: CatalogTerminalRunActivityName},
+	)
+	return nil
+}
+
+// CatalogTerminalRunActivity is the activity reference symbol for workflow invocations
+// of "CatalogTerminalRunActivity" on coordinator-task-queue. Direct execution without
+// a dependency-bound CatalogActivities instance returns ErrNilCatalogStore.
 func CatalogTerminalRunActivity(
 	ctx context.Context,
 	req coordinatorv1.CatalogTerminalRunRequest,
 ) (*coordinatorv1.CatalogTerminalRunResponse, error) {
-	a := &CatalogActivities{}
+	var a *CatalogActivities
 	return a.CatalogTerminalRun(ctx, req)
 }
 
@@ -53,6 +75,10 @@ func (a *CatalogActivities) CatalogTerminalRun(
 ) (*coordinatorv1.CatalogTerminalRunResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+
+	if a == nil || a.Store == nil {
+		return nil, ErrNilCatalogStore
 	}
 
 	if strings.TrimSpace(req.WorkflowID) == "" || strings.TrimSpace(req.TenantID) == "" || strings.TrimSpace(req.DocumentID) == "" {
@@ -73,13 +99,12 @@ func (a *CatalogActivities) CatalogTerminalRun(
 		)
 	}
 
-	recordID := fmt.Sprintf("run_rec_%s", req.WorkflowID)
-	if a != nil && a.Store != nil {
-		id, err := a.Store.RecordTerminalRun(ctx, req)
-		if err != nil {
-			return nil, err
-		}
-		recordID = id
+	recordID, err := a.Store.RecordTerminalRun(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(recordID) == "" {
+		recordID = fmt.Sprintf("run_rec_%s", req.WorkflowID)
 	}
 
 	logger := activity.GetLogger(ctx)

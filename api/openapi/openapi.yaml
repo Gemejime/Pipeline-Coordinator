@@ -249,7 +249,7 @@ components:
         - tenant_id
         - s3_bucket
         - s3_key
-        - expires_at
+        - expires_at_unix
         - lease_seconds
       properties:
         upload_id:
@@ -278,12 +278,14 @@ components:
           description: Presigned part URLs for multipart uploads (files >100MB up to 10GB)
           items:
             $ref: '#/components/schemas/PresignedPart'
-        expires_at:
-          type: string
-          format: date-time
-          example: 2026-11-07T08:35:00Z
+        expires_at_unix:
+          type: integer
+          format: int64
+          description: UTC Unix epoch timestamp in seconds when the presigned upload lease expires
+          example: 1794040500
         lease_seconds:
           type: integer
+          format: int32
           example: 900
 
     PresignedPart:
@@ -405,7 +407,7 @@ components:
         - workflow_id
         - run_id
         - status
-        - started_at
+        - started_at_unix
       properties:
         workflow_id:
           type: string
@@ -417,10 +419,11 @@ components:
         status:
           type: string
           example: RUNNING
-        started_at:
-          type: string
-          format: date-time
-          example: 2026-11-07T08:20:00Z
+        started_at_unix:
+          type: integer
+          format: int64
+          description: UTC Unix epoch timestamp in seconds when the workflow execution started
+          example: 1794039600
 
     WorkflowStatusResponse:
       type: object

@@ -109,12 +109,16 @@ func InspectionActivityOptions() workflow.ActivityOptions {
 }
 
 // DocAIActivityOptions returns deterministic ActivityOptions for doc-ai-task-queue.
+// Single-attempt execution (MaximumAttempts = 1) is enforced at the activity level so
+// DocumentPartitionWorkflow can re-issue fresh 15-minute presigned S3 URLs before every retry.
 func DocAIActivityOptions() workflow.ActivityOptions {
+	retryPolicy := DefaultComputeRetryPolicy()
+	retryPolicy.MaximumAttempts = 1
 	return workflow.ActivityOptions{
 		TaskQueue:           DocAITaskQueue,
-		StartToCloseTimeout: 45 * time.Minute,
+		StartToCloseTimeout: time.Duration(activity.DefaultPresignLeaseSeconds) * time.Second,
 		HeartbeatTimeout:    DocAIHeartbeatTimeout,
-		RetryPolicy:         DefaultComputeRetryPolicy(),
+		RetryPolicy:         retryPolicy,
 	}
 }
 

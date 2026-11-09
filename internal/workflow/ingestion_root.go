@@ -27,28 +27,33 @@ const (
 // IngestionRequest defines the input payload for IngestionCoordinatorWorkflow,
 // including state carried across ContinueAsNew generation boundaries (ADR-002).
 type IngestionRequest struct {
-	TenantID              string           `json:"tenant_id"`
-	DocumentID            string           `json:"document_id"`
-	PipelineRunID         string           `json:"pipeline_run_id,omitempty"`
-	S3Bucket              string           `json:"s3_bucket"`
-	S3Key                 string           `json:"s3_key"`
-	ContentHash           string           `json:"content_hash"`
-	TotalBytes            int64            `json:"total_bytes"`
-	MimeType              string           `json:"mime_type"`
-	PipelineConfigID      string           `json:"pipeline_config_id,omitempty"`
-	UseHashPrefixS3Layout bool             `json:"use_hash_prefix_s3_layout,omitempty"`
-	Generation            int32            `json:"generation,omitempty"`
-	StartedAtUnix         int64            `json:"started_at_unix,omitempty"`
-	NextSequenceNumber    int64            `json:"next_sequence_number,omitempty"`
-	TotalPages            int32            `json:"total_pages,omitempty"`
-	TotalSlices           int32            `json:"total_slices,omitempty"`
-	CompletedSlices       int32            `json:"completed_slices,omitempty"`
-	FailedSlices          int32            `json:"failed_slices,omitempty"`
-	FailedSliceIDs        []string         `json:"failed_slice_ids,omitempty"`
-	AccumulatedChunks     int32            `json:"accumulated_chunks,omitempty"`
-	AccumulatedTokens     int32            `json:"accumulated_tokens,omitempty"`
-	RemainingSlices       []PartitionSlice `json:"remaining_slices,omitempty"`
-	RootWorkflowID        string           `json:"root_workflow_id,omitempty"`
+	TenantID                 string                           `json:"tenant_id"`
+	DocumentID               string                           `json:"document_id"`
+	PipelineRunID            string                           `json:"pipeline_run_id,omitempty"`
+	S3Bucket                 string                           `json:"s3_bucket"`
+	S3Key                    string                           `json:"s3_key"`
+	ContentHash              string                           `json:"content_hash"`
+	TotalBytes               int64                            `json:"total_bytes"`
+	MimeType                 string                           `json:"mime_type"`
+	PipelineConfigID         string                           `json:"pipeline_config_id,omitempty"`
+	PipelineConfig           *coordinatorv1.PipelineConfig    `json:"pipeline_config,omitempty"`
+	UseHashPrefixS3Layout    bool                             `json:"use_hash_prefix_s3_layout,omitempty"`
+	Modality                 coordinatorv1.MultimodalModality `json:"modality,omitempty"`
+	DurationSeconds          float64                          `json:"duration_seconds,omitempty"`
+	RecommendedSlicePages    int32                            `json:"recommended_slice_pages,omitempty"`
+	RecommendedWindowSeconds float64                          `json:"recommended_window_seconds,omitempty"`
+	Generation               int32                            `json:"generation,omitempty"`
+	StartedAtUnix            int64                            `json:"started_at_unix,omitempty"`
+	NextSequenceNumber       int64                            `json:"next_sequence_number,omitempty"`
+	NextSliceIndex           int32                            `json:"next_slice_index,omitempty"`
+	TotalPages               int32                            `json:"total_pages,omitempty"`
+	TotalSlices              int32                            `json:"total_slices,omitempty"`
+	CompletedSlices          int32                            `json:"completed_slices,omitempty"`
+	FailedSlices             int32                            `json:"failed_slices,omitempty"`
+	FailedSliceIDs           []string                         `json:"failed_slice_ids,omitempty"`
+	AccumulatedChunks        int32                            `json:"accumulated_chunks,omitempty"`
+	AccumulatedTokens        int32                            `json:"accumulated_tokens,omitempty"`
+	RootWorkflowID           string                           `json:"root_workflow_id,omitempty"`
 }
 
 // IngestionStatus represents the live in-flight status returned by the
@@ -218,10 +223,14 @@ func IngestionCoordinatorWorkflow(ctx workflow.Context, req IngestionRequest) (*
 		}
 	}
 
-	remainingSlices := req.RemainingSlices
+	modality := req.Modality
+	totalPages := req.TotalPages
+	durationSeconds := req.DurationSeconds
+	recommendedSlicePages := req.RecommendedSlicePages
+	recommendedWindowSeconds := req.RecommendedWindowSeconds
 
-	// Initial generation (Generation == 0): upsert search attributes, inspect header, and plan manifest.
-	if req.Generation == 0 && len(remainingSlices) == 0 {
+	// Initial generation (Generation == 0): upsert search attributes and inspect header.
+	if req.Generation == 0 {
 		_ = workflow.UpsertTypedSearchAttributes(
 			ctx,
 			SearchAttrTenantID.ValueSet(req.TenantID),
@@ -265,45 +274,59 @@ func IngestionCoordinatorWorkflow(ctx workflow.Context, req IngestionRequest) (*
 			return nil, fmt.Errorf("document header inspection failed: %w", err)
 		}
 
-		slices, err := service.PlanSlices(service.ManifestPlanInput{
-			TenantID:              req.TenantID,
-			DocumentID:            req.DocumentID,
-			ContentHash:           req.ContentHash,
-			S3InputBucket:         req.S3Bucket,
-			S3InputKey:            req.S3Key,
-			TotalBytes:            req.TotalBytes,
-			Modality:              inspectResp.Modality,
-			TotalPages:            inspectResp.TotalPages,
-			DurationSeconds:       inspectResp.DurationSeconds,
-			PagesPerSlice:         inspectResp.RecommendedSlicePages,
-			WindowSeconds:         inspectResp.RecommendedWindowSeconds,
-			UseHashPrefixS3Layout: req.UseHashPrefixS3Layout,
-		})
-		if err != nil {
-			liveStatus.Status = activity.TerminalStatusFailed
-			liveStatus.Stage = StageFailed
-			catalogTerminalRun(activity.TerminalStatusFailed, err.Error())
-			publishMilestone(StageFailed, activity.TerminalStatusFailed)
-			return nil, temporal.NewNonRetryableApplicationError(
-				err.Error(),
-				activity.ErrCodeCorruptInput,
-				err,
-			)
-		}
-
-		remainingSlices = slices
-		liveStatus.TotalPages = inspectResp.TotalPages
-		liveStatus.TotalSlices = int32(len(slices))
-		liveStatus.Stage = StageExtractSegments
+		modality = inspectResp.Modality
+		totalPages = inspectResp.TotalPages
+		durationSeconds = inspectResp.DurationSeconds
+		recommendedSlicePages = inspectResp.RecommendedSlicePages
+		recommendedWindowSeconds = inspectResp.RecommendedWindowSeconds
 	}
 
-	// Partition current generation batch (bounded to MaxSlicesPerGeneration = 100).
-	batchSize := len(remainingSlices)
-	if batchSize > MaxSlicesPerGeneration {
-		batchSize = MaxSlicesPerGeneration
+	// Deterministically recreate the slice plan for the current generation using manifest plan inputs.
+	slices, err := service.PlanSlices(service.ManifestPlanInput{
+		TenantID:              req.TenantID,
+		DocumentID:            req.DocumentID,
+		ContentHash:           req.ContentHash,
+		S3InputBucket:         req.S3Bucket,
+		S3InputKey:            req.S3Key,
+		TotalBytes:            req.TotalBytes,
+		Modality:              modality,
+		TotalPages:            totalPages,
+		DurationSeconds:       durationSeconds,
+		PagesPerSlice:         recommendedSlicePages,
+		WindowSeconds:         recommendedWindowSeconds,
+		UseHashPrefixS3Layout: req.UseHashPrefixS3Layout,
+	})
+	if err != nil {
+		liveStatus.Status = activity.TerminalStatusFailed
+		liveStatus.Stage = StageFailed
+		catalogTerminalRun(activity.TerminalStatusFailed, err.Error())
+		publishMilestone(StageFailed, activity.TerminalStatusFailed)
+		return nil, temporal.NewNonRetryableApplicationError(
+			err.Error(),
+			activity.ErrCodeCorruptInput,
+			err,
+		)
 	}
-	currentBatch := remainingSlices[:batchSize]
-	nextBatch := remainingSlices[batchSize:]
+
+	liveStatus.TotalPages = totalPages
+	liveStatus.TotalSlices = int32(len(slices))
+	liveStatus.Stage = StageExtractSegments
+
+	// Partition current generation batch starting from NextSliceIndex (bounded to MaxSlicesPerGeneration = 100).
+	startIdx := int(req.NextSliceIndex)
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	if startIdx > len(slices) {
+		startIdx = len(slices)
+	}
+	endIdx := startIdx + MaxSlicesPerGeneration
+	if endIdx > len(slices) {
+		endIdx = len(slices)
+	}
+	currentBatch := slices[startIdx:endIdx]
+	nextSliceIndex := int32(endIdx)
+	resolvedPipelineConfig := ResolvePipelineConfig(req.TenantID, req.PipelineConfigID, req.PipelineConfig)
 
 	publishMilestone(StageExtractSegments, "PROGRESS")
 
@@ -314,6 +337,10 @@ func IngestionCoordinatorWorkflow(ctx workflow.Context, req IngestionRequest) (*
 
 	childTasks := make([]childTask, 0, len(currentBatch))
 	for _, slice := range currentBatch {
+		cfgCopy := resolvedPipelineConfig
+		slice.PipelineConfigID = resolvedPipelineConfig.ID
+		slice.PipelineConfig = &cfgCopy
+
 		childWorkflowID := fmt.Sprintf("%s-slice-%05d", rootWorkflowID, slice.SliceIndex)
 		childOpts := workflow.ChildWorkflowOptions{
 			WorkflowID:        childWorkflowID,
@@ -370,30 +397,36 @@ func IngestionCoordinatorWorkflow(ctx workflow.Context, req IngestionRequest) (*
 	}
 
 	// ADR-002: If more slices remain, transition via ContinueAsNew to bound event history (<2,500 events).
-	if len(nextBatch) > 0 {
+	if int(nextSliceIndex) < len(slices) {
+		cfgCopy := resolvedPipelineConfig
 		nextReq := IngestionRequest{
-			TenantID:              req.TenantID,
-			DocumentID:            req.DocumentID,
-			PipelineRunID:         pipelineRunID,
-			S3Bucket:              req.S3Bucket,
-			S3Key:                 req.S3Key,
-			ContentHash:           req.ContentHash,
-			TotalBytes:            req.TotalBytes,
-			MimeType:              req.MimeType,
-			PipelineConfigID:      req.PipelineConfigID,
-			UseHashPrefixS3Layout: req.UseHashPrefixS3Layout,
-			Generation:            req.Generation + 1,
-			StartedAtUnix:         startedAtUnix,
-			NextSequenceNumber:    nextSeq,
-			TotalPages:            liveStatus.TotalPages,
-			TotalSlices:           liveStatus.TotalSlices,
-			CompletedSlices:       liveStatus.CompletedSlices,
-			FailedSlices:          liveStatus.FailedSlices,
-			FailedSliceIDs:        liveStatus.FailedSliceIDs,
-			AccumulatedChunks:     accumulatedChunks,
-			AccumulatedTokens:     accumulatedTokens,
-			RemainingSlices:       nextBatch,
-			RootWorkflowID:        rootWorkflowID,
+			TenantID:                 req.TenantID,
+			DocumentID:               req.DocumentID,
+			PipelineRunID:            pipelineRunID,
+			S3Bucket:                 req.S3Bucket,
+			S3Key:                    req.S3Key,
+			ContentHash:              req.ContentHash,
+			TotalBytes:               req.TotalBytes,
+			MimeType:                 req.MimeType,
+			PipelineConfigID:         resolvedPipelineConfig.ID,
+			PipelineConfig:           &cfgCopy,
+			UseHashPrefixS3Layout:    req.UseHashPrefixS3Layout,
+			Modality:                 modality,
+			DurationSeconds:          durationSeconds,
+			RecommendedSlicePages:    recommendedSlicePages,
+			RecommendedWindowSeconds: recommendedWindowSeconds,
+			Generation:               req.Generation + 1,
+			StartedAtUnix:            startedAtUnix,
+			NextSequenceNumber:       nextSeq,
+			NextSliceIndex:           nextSliceIndex,
+			TotalPages:               liveStatus.TotalPages,
+			TotalSlices:              liveStatus.TotalSlices,
+			CompletedSlices:          liveStatus.CompletedSlices,
+			FailedSlices:             liveStatus.FailedSlices,
+			FailedSliceIDs:           liveStatus.FailedSliceIDs,
+			AccumulatedChunks:        accumulatedChunks,
+			AccumulatedTokens:        accumulatedTokens,
+			RootWorkflowID:           rootWorkflowID,
 		}
 		logger.Info("continuing root ingestion workflow as new generation",
 			"tenant_id", req.TenantID,
@@ -401,7 +434,8 @@ func IngestionCoordinatorWorkflow(ctx workflow.Context, req IngestionRequest) (*
 			"workflow_id", rootWorkflowID,
 			"next_generation", nextReq.Generation,
 			"completed_slices", nextReq.CompletedSlices,
-			"remaining_slices", len(nextBatch),
+			"next_slice_index", nextReq.NextSliceIndex,
+			"remaining_slices", len(slices)-int(nextSliceIndex),
 		)
 		return nil, workflow.NewContinueAsNewError(ctx, IngestionCoordinatorWorkflow, nextReq)
 	}

@@ -222,6 +222,7 @@ func (a *PolyglotWorkerActivities) CompileChunks(
 	}, nil
 }
 
+// computeSliceTotalUnits calculates the number of checkpointable processing units (pages or 10s media segments) in a slice.
 func computeSliceTotalUnits(slice coordinatorv1.PartitionSlice) int32 {
 	if slice.EndPage >= slice.StartPage && slice.StartPage > 0 {
 		return slice.EndPage - slice.StartPage + 1
