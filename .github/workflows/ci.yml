@@ -125,7 +125,7 @@ jobs:
         run: |
           if [ -f "api/openapi/openapi.yaml" ]; then
             echo "Validating OpenAPI specification..."
-            npx @stoplight/spectral-cli lint api/openapi/openapi.yaml
+            npx @stoplight/spectral-cli lint --ruleset .spectral.yaml api/openapi/openapi.yaml
           else
             echo "api/openapi/openapi.yaml not yet present, checking documentation sync..."
           fi
@@ -177,7 +177,12 @@ jobs:
         run: |
           echo "Validating Temporal workflow history event limit guardrails (<10,000 events)..."
           if [ -f "go.mod" ]; then
-            go test -v -race -run "Test.*History" ./test/workflow/...
+            set -o pipefail
+            OUTPUT=$(go test -v -race -run "Test.*History" ./test/workflow/... 2>&1 | tee /dev/stderr)
+            if ! printf '%s\n' "$OUTPUT" | grep -Eq "^=== RUN   Test.*History"; then
+              echo "ERROR: No matching Test.*History tests were executed!"
+              exit 1
+            fi
           else
             if ! grep -q "10,000" .ai/architecture.md || ! grep -q "2,500" .ai/architecture.md; then
               echo "ERROR: Temporal workflow history thresholds (<10,000 and <2,500 events) missing from architecture spec!"

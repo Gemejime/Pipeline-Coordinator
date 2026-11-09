@@ -12,6 +12,7 @@ import (
 	"rag-ingestion-coordinator/internal/service"
 )
 
+// TestPlanSlices_SinglePagePDF verifies manifest planning for a 1-page PDF boundary case.
 func TestPlanSlices_SinglePagePDF(t *testing.T) {
 	t.Parallel()
 
@@ -40,6 +41,7 @@ func TestPlanSlices_SinglePagePDF(t *testing.T) {
 	assert.Len(t, s.SliceID, 64)
 }
 
+// TestPlanSlices_20000PageDocument_NonOverlapping verifies non-overlapping slice generation for a 20,000-page PDF.
 func TestPlanSlices_20000PageDocument_NonOverlapping(t *testing.T) {
 	t.Parallel()
 
@@ -83,6 +85,7 @@ func TestPlanSlices_20000PageDocument_NonOverlapping(t *testing.T) {
 	assert.Equal(t, int32(20000), slices[len(slices)-1].EndPage)
 }
 
+// TestPlanSlices_DeterministicIdempotencyAndHashPrefixRunbook2 verifies deterministic slice IDs and Runbook 2 hash-prefixed S3 keys.
 func TestPlanSlices_DeterministicIdempotencyAndHashPrefixRunbook2(t *testing.T) {
 	t.Parallel()
 
@@ -134,6 +137,7 @@ func TestPlanSlices_DeterministicIdempotencyAndHashPrefixRunbook2(t *testing.T) 
 	}
 }
 
+// TestPlanSlices_MediaSlidingWindows verifies sliding time-window slice generation for continuous audio/video media.
 func TestPlanSlices_MediaSlidingWindows(t *testing.T) {
 	t.Parallel()
 
@@ -169,6 +173,7 @@ func TestPlanSlices_MediaSlidingWindows(t *testing.T) {
 	assert.InDelta(t, 1500.0, slices[2].EndTimeSeconds, 0.001)
 }
 
+// TestPlanSlices_RejectsInvalidAndCorruptedInputs verifies non-retryable validation errors on corrupted or out-of-bounds inputs.
 func TestPlanSlices_RejectsInvalidAndCorruptedInputs(t *testing.T) {
 	t.Parallel()
 

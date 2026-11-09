@@ -19,6 +19,7 @@ import (
 	"rag-ingestion-coordinator/internal/workflow"
 )
 
+// TestDocumentPartitionWorkflow_Success verifies the per-slice child workflow activity sequence and custom PipelineConfig propagation.
 func TestDocumentPartitionWorkflow_Success(t *testing.T) {
 	t.Parallel()
 
@@ -28,6 +29,14 @@ func TestDocumentPartitionWorkflow_Success(t *testing.T) {
 	env.RegisterActivity(activity.PresignS3ArtifactActivity)
 	env.RegisterActivity(activity.DispatchDocAIExtractActivity)
 	env.RegisterActivity(activity.CompileChunksActivity)
+
+	customCfg := &coordinatorv1.PipelineConfig{
+		ID:                 "custom-finance-v2",
+		TenantID:           "tenant-corp-01",
+		ChunkSizeTokens:    512,
+		ChunkOverlapTokens: 64,
+		OCREnabled:         false,
+	}
 
 	slice := coordinatorv1.PartitionSlice{
 		SliceID:            "slice-hash-001",
@@ -42,6 +51,8 @@ func TestDocumentPartitionWorkflow_Success(t *testing.T) {
 		Modality:           coordinatorv1.MultimodalModalityDocumentPDF,
 		StartPage:          1,
 		EndPage:            50,
+		PipelineConfigID:   customCfg.ID,
+		PipelineConfig:     customCfg,
 	}
 
 	env.ExecuteWorkflow(workflow.DocumentPartitionWorkflow, slice)
@@ -56,9 +67,80 @@ func TestDocumentPartitionWorkflow_Success(t *testing.T) {
 	assert.Equal(t, "artifacts/tenant-corp-01/hash-001/slice_1_50.parquet", result.S3OutputParquetKey)
 	assert.Equal(t, int32(50), result.ExtractedPages)
 	assert.Equal(t, int32(100), result.CompiledChunks)
-	assert.Equal(t, int32(30000), result.TotalTokens)
+	assert.Equal(t, int32(51200), result.TotalTokens)
 }
 
+// TestDocumentPartitionWorkflow_RePresignsOnExtractionRetry verifies that each extraction retry receives freshly presigned URLs.
+func TestDocumentPartitionWorkflow_RePresignsOnExtractionRetry(t *testing.T) {
+	t.Parallel()
+
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+
+	var presignAttempts int
+	env.RegisterActivityWithOptions(
+		func(ctx context.Context, req coordinatorv1.PresignSliceArtifactRequest) (*coordinatorv1.PresignSliceArtifactResponse, error) {
+			presignAttempts++
+			return &coordinatorv1.PresignSliceArtifactResponse{
+				S3Bucket:              req.Slice.S3InputBucket,
+				S3InputKey:            req.Slice.S3InputKey,
+				S3OutputParquetKey:    req.Slice.S3OutputParquetKey,
+				PresignedInputGetURL:  fmt.Sprintf("https://s3.example.com/get?attempt=%d", presignAttempts),
+				PresignedOutputPutURL: fmt.Sprintf("https://s3.example.com/put?attempt=%d", presignAttempts),
+				ExpiresAtUnix:         1794040500 + int64(presignAttempts),
+			}, nil
+		},
+		temporalactivity.RegisterOptions{Name: "PresignS3ArtifactActivity"},
+	)
+
+	var seenGetURLs []string
+	env.RegisterActivityWithOptions(
+		func(ctx context.Context, req coordinatorv1.ExtractSegmentRequest) (*coordinatorv1.ExtractSegmentResponse, error) {
+			seenGetURLs = append(seenGetURLs, req.PresignedInputGetURL)
+			if len(seenGetURLs) == 1 {
+				return nil, errors.New("transient GPU worker timeout")
+			}
+			return &coordinatorv1.ExtractSegmentResponse{
+				SliceID:            req.Slice.SliceID,
+				SliceIndex:         req.Slice.SliceIndex,
+				S3OutputBucket:     req.Slice.S3InputBucket,
+				S3OutputParquetKey: req.Slice.S3OutputParquetKey,
+				ExtractedPages:     10,
+				ExtractedSegments:  10,
+				ParquetBytes:       40960,
+			}, nil
+		},
+		temporalactivity.RegisterOptions{Name: "DispatchDocAIExtractActivity"},
+	)
+	env.RegisterActivity(activity.CompileChunksActivity)
+
+	slice := coordinatorv1.PartitionSlice{
+		SliceID:            "slice-represign-01",
+		SliceIndex:         0,
+		TotalSlices:        1,
+		TenantID:           "tenant-corp-01",
+		DocumentID:         "doc-001",
+		ContentHash:        "hash-001",
+		S3InputBucket:      "rag-ingestion-bucket",
+		S3InputKey:         "raw/tenant-corp-01/hash-001/report.pdf",
+		S3OutputParquetKey: "artifacts/tenant-corp-01/hash-001/slice_1_10.parquet",
+		Modality:           coordinatorv1.MultimodalModalityDocumentPDF,
+		StartPage:          1,
+		EndPage:            10,
+	}
+
+	env.ExecuteWorkflow(workflow.DocumentPartitionWorkflow, slice)
+	require.True(t, env.IsWorkflowCompleted())
+	require.NoError(t, env.GetWorkflowError())
+
+	assert.Equal(t, 2, presignAttempts, "must re-issue presigned URLs before retrying extraction")
+	require.Equal(t, []string{
+		"https://s3.example.com/get?attempt=1",
+		"https://s3.example.com/get?attempt=2",
+	}, seenGetURLs)
+}
+
+// TestActivity_HeartbeatRecovery_ResumesFromLastCheckpoint verifies ADR-003 HeartbeatDetails checkpoint resumption.
 func TestActivity_HeartbeatRecovery_ResumesFromLastCheckpoint(t *testing.T) {
 	t.Parallel()
 
@@ -146,6 +228,7 @@ func TestActivity_HeartbeatRecovery_ResumesFromLastCheckpoint(t *testing.T) {
 	assert.Equal(t, int32(50), processedAttempt2[len(processedAttempt2)-1])
 }
 
+// TestIngestionCoordinatorWorkflow_EndToEnd_And_QueryStatus verifies end-to-end root workflow orchestration, status query handler, and terminal cataloging.
 func TestIngestionCoordinatorWorkflow_EndToEnd_And_QueryStatus(t *testing.T) {
 	t.Parallel()
 
@@ -175,10 +258,7 @@ func TestIngestionCoordinatorWorkflow_EndToEnd_And_QueryStatus(t *testing.T) {
 			catalogedRuns = append(catalogedRuns, req)
 		},
 	})
-	env.RegisterActivityWithOptions(
-		catActs.CatalogTerminalRun,
-		temporalactivity.RegisterOptions{Name: "CatalogTerminalRunActivity"},
-	)
+	require.NoError(t, catActs.Register(env))
 
 	req := workflow.IngestionRequest{
 		TenantID:         "tenant-corp-01",
@@ -232,6 +312,7 @@ func TestIngestionCoordinatorWorkflow_EndToEnd_And_QueryStatus(t *testing.T) {
 	assert.Equal(t, int32(0), catalogedRuns[0].FailedSlices)
 }
 
+// TestIngestionCoordinatorWorkflow_HistoryLimit_20000Pages verifies bounded ContinueAsNew generations (<2,500 history events) for a 20,000-page document.
 func TestIngestionCoordinatorWorkflow_HistoryLimit_20000Pages(t *testing.T) {
 	t.Parallel()
 
@@ -247,14 +328,15 @@ func TestIngestionCoordinatorWorkflow_HistoryLimit_20000Pages(t *testing.T) {
 	)
 
 	currentReq := workflow.IngestionRequest{
-		TenantID:         "tenant-scale-20k",
-		DocumentID:       "doc-20000-pages",
-		S3Bucket:         "rag-ingestion-bucket",
-		S3Key:            "raw/tenant-scale-20k/hash/massive-corpus.pdf",
-		ContentHash:      "99887766554433221100ffeeddccbbaa99887766554433221100ffeeddccbbaa",
-		TotalBytes:       int64(totalPages) * 64 * 1024,
-		MimeType:         "application/pdf",
-		PipelineConfigID: "default-multimodal-v1",
+		TenantID:              "tenant-scale-20k",
+		DocumentID:            "doc-20000-pages",
+		S3Bucket:              "rag-ingestion-bucket",
+		S3Key:                 "raw/tenant-scale-20k/hash/massive-corpus.pdf",
+		ContentHash:           "99887766554433221100ffeeddccbbaa99887766554433221100ffeeddccbbaa",
+		TotalBytes:            int64(totalPages) * 64 * 1024,
+		MimeType:              "application/pdf",
+		PipelineConfigID:      "custom-20k-config-v1",
+		UseHashPrefixS3Layout: true,
 	}
 
 	var catalogedRuns []coordinatorv1.CatalogTerminalRunRequest
@@ -276,10 +358,7 @@ func TestIngestionCoordinatorWorkflow_HistoryLimit_20000Pages(t *testing.T) {
 				catalogedRuns = append(catalogedRuns, r)
 			},
 		})
-		env.RegisterActivityWithOptions(
-			catActs.CatalogTerminalRun,
-			temporalactivity.RegisterOptions{Name: "CatalogTerminalRunActivity"},
-		)
+		require.NoError(t, catActs.Register(env))
 
 		// Estimate history events for this generation:
 		// Each child workflow spawn & completion in a root generation records ~6 events
@@ -301,7 +380,13 @@ func TestIngestionCoordinatorWorkflow_HistoryLimit_20000Pages(t *testing.T) {
 			completedSoFar := int32((gen + 1) * workflow.MaxSlicesPerGeneration)
 			assert.Equal(t, int32(gen+1), nextReq.Generation)
 			assert.Equal(t, completedSoFar, nextReq.CompletedSlices)
-			assert.Len(t, nextReq.RemainingSlices, int(expectedSlices-completedSoFar))
+			assert.Equal(t, completedSoFar, nextReq.NextSliceIndex)
+			assert.Equal(t, coordinatorv1.MultimodalModalityDocumentPDF, nextReq.Modality)
+			assert.Equal(t, int32(totalPages), nextReq.TotalPages)
+			assert.True(t, nextReq.UseHashPrefixS3Layout)
+			assert.Equal(t, "custom-20k-config-v1", nextReq.PipelineConfigID)
+			require.NotNil(t, nextReq.PipelineConfig)
+			assert.Equal(t, "custom-20k-config-v1", nextReq.PipelineConfig.ID)
 
 			queryVal, qErr := env.QueryWorkflow(workflow.QueryTypeIngestionStatus)
 			require.NoError(t, qErr)
@@ -334,6 +419,7 @@ func TestIngestionCoordinatorWorkflow_HistoryLimit_20000Pages(t *testing.T) {
 	assert.Equal(t, int32(expectedSlices), catalogedRuns[0].CompletedSlices)
 }
 
+// TestIngestionCoordinatorWorkflow_PoisonPillSliceIsolation verifies Runbook 3 poison-pill partition isolation.
 func TestIngestionCoordinatorWorkflow_PoisonPillSliceIsolation(t *testing.T) {
 	t.Parallel()
 
@@ -353,10 +439,7 @@ func TestIngestionCoordinatorWorkflow_PoisonPillSliceIsolation(t *testing.T) {
 			catalogedRuns = append(catalogedRuns, r)
 		},
 	})
-	env.RegisterActivityWithOptions(
-		catActs.CatalogTerminalRun,
-		temporalactivity.RegisterOptions{Name: "CatalogTerminalRunActivity"},
-	)
+	require.NoError(t, catActs.Register(env))
 
 	// Simulate poison-pill failure on slice_index == 1 while sibling slices (0, 2, 3) succeed (Runbook 3).
 	env.OnActivity(
@@ -414,6 +497,7 @@ func TestIngestionCoordinatorWorkflow_PoisonPillSliceIsolation(t *testing.T) {
 	assert.Contains(t, catalogedRuns[0].ErrorMessage, "poison-pill")
 }
 
+// TestIngestionCoordinatorWorkflow_FailureCataloging verifies terminal FAILED cataloging on non-retryable inspection failure.
 func TestIngestionCoordinatorWorkflow_FailureCataloging(t *testing.T) {
 	t.Parallel()
 
@@ -430,10 +514,7 @@ func TestIngestionCoordinatorWorkflow_FailureCataloging(t *testing.T) {
 			catalogedRuns = append(catalogedRuns, r)
 		},
 	})
-	env.RegisterActivityWithOptions(
-		catActs.CatalogTerminalRun,
-		temporalactivity.RegisterOptions{Name: "CatalogTerminalRunActivity"},
-	)
+	require.NoError(t, catActs.Register(env))
 
 	// Zero-byte payload triggers non-retryable CORRUPT_INPUT during header inspection.
 	req := workflow.IngestionRequest{
@@ -455,10 +536,12 @@ func TestIngestionCoordinatorWorkflow_FailureCataloging(t *testing.T) {
 	assert.Equal(t, "doc-corrupt-zero-bytes", catalogedRuns[0].DocumentID)
 }
 
+// inMemoryMilestonePublisher captures published ProgressMilestoneEvent payloads in memory for test assertions.
 type inMemoryMilestonePublisher struct {
 	onPublish func(ev coordinatorv1.ProgressMilestoneEvent)
 }
 
+// PublishMilestone records the milestone event in memory.
 func (p *inMemoryMilestonePublisher) PublishMilestone(
 	_ context.Context,
 	_ string,
@@ -470,10 +553,12 @@ func (p *inMemoryMilestonePublisher) PublishMilestone(
 	return nil
 }
 
+// inMemoryCatalogStore captures terminal workflow catalog requests in memory for test assertions.
 type inMemoryCatalogStore struct {
 	onRecord func(req coordinatorv1.CatalogTerminalRunRequest)
 }
 
+// RecordTerminalRun records the terminal workflow run in memory and returns a deterministic record ID.
 func (s *inMemoryCatalogStore) RecordTerminalRun(
 	_ context.Context,
 	req coordinatorv1.CatalogTerminalRunRequest,
