@@ -2,7 +2,9 @@ package activity
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -10,6 +12,7 @@ import (
 	"go.temporal.io/sdk/temporal"
 
 	coordinatorv1 "rag-ingestion-coordinator/api/proto/v1"
+	"rag-ingestion-coordinator/internal/service"
 )
 
 const (
@@ -43,7 +46,8 @@ func PresignS3ArtifactActivity(
 	return a.PresignS3Artifact(ctx, req)
 }
 
-// PresignS3Artifact validates slice metadata and issues scoped 15-minute S3 URLs.
+// PresignS3Artifact validates slice metadata, enforces tenant isolation on raw input keys
+// and deterministic content-addressed output Parquet keys, and issues scoped 15-minute S3 URLs.
 func (a *PresignActivities) PresignS3Artifact(
 	ctx context.Context,
 	req coordinatorv1.PresignSliceArtifactRequest,
@@ -60,14 +64,60 @@ func (a *PresignActivities) PresignS3Artifact(
 			nil,
 		)
 	}
-	if strings.TrimSpace(slice.S3InputBucket) == "" || strings.TrimSpace(slice.S3InputKey) == "" || strings.TrimSpace(slice.S3OutputParquetKey) == "" {
+	if strings.TrimSpace(slice.S3InputBucket) == "" || strings.TrimSpace(slice.S3InputKey) == "" {
 		return nil, temporal.NewNonRetryableApplicationError(
-			"slice s3_input_bucket, s3_input_key, and s3_output_parquet_key are required",
+			"slice s3_input_bucket and s3_input_key are required",
 			ErrCodeInvalidArgument,
 			nil,
 		)
 	}
 
+	// Enforce tenant isolation and zero path-traversal on slice.S3InputKey (raw/<tenant_id>/...).
+	if err := service.ValidateTenantRawS3Key(slice.TenantID, slice.S3InputKey); err != nil {
+		errCode := ErrCodeInvalidArgument
+		if errors.Is(err, service.ErrTenantMismatch) {
+			errCode = ErrCodeTenantMismatch
+		}
+		return nil, temporal.NewNonRetryableApplicationError(err.Error(), errCode, err)
+	}
+
+	// Auto-compute deterministic S3OutputParquetKey when omitted and ContentHash is present.
+	if strings.TrimSpace(slice.S3OutputParquetKey) == "" && strings.TrimSpace(slice.ContentHash) != "" {
+		startMarker := int(slice.StartPage)
+		endMarker := int(slice.EndPage)
+		if slice.Modality == coordinatorv1.MultimodalModalityAudio || slice.Modality == coordinatorv1.MultimodalModalityVideo {
+			startMarker = int(math.Round(slice.StartTimeSeconds))
+			endMarker = int(math.Round(slice.EndTimeSeconds))
+		}
+		slice.S3OutputParquetKey = service.BuildS3OutputParquetKey(
+			slice.TenantID,
+			slice.DocumentID,
+			slice.ContentHash,
+			startMarker,
+			endMarker,
+			false,
+		)
+	}
+	if strings.TrimSpace(slice.S3OutputParquetKey) == "" {
+		return nil, temporal.NewNonRetryableApplicationError(
+			"slice s3_output_parquet_key is required",
+			ErrCodeInvalidArgument,
+			nil,
+		)
+	}
+
+	// Validate deterministic content-addressed S3 output Parquet key when ContentHash is specified.
+	if strings.TrimSpace(slice.ContentHash) != "" {
+		if err := service.ValidateSliceOutputParquetKey(slice.TenantID, slice.ContentHash, slice.S3OutputParquetKey); err != nil {
+			errCode := ErrCodeInvalidArgument
+			if errors.Is(err, service.ErrTenantMismatch) {
+				errCode = ErrCodeTenantMismatch
+			}
+			return nil, temporal.NewNonRetryableApplicationError(err.Error(), errCode, err)
+		}
+	}
+
+	req.Slice = slice
 	leaseSeconds := req.LeaseSeconds
 	if leaseSeconds <= 0 || leaseSeconds > DefaultPresignLeaseSeconds {
 		leaseSeconds = DefaultPresignLeaseSeconds
@@ -106,6 +156,9 @@ func (a *PresignActivities) PresignS3Artifact(
 // logRedactedPresignEvent logs only sanitized S3 bucket and key identifiers,
 // never logging raw presigned URLs or query parameters.
 func logRedactedPresignEvent(ctx context.Context, slice coordinatorv1.PartitionSlice, leaseSeconds int32) {
+	defer func() {
+		_ = recover()
+	}()
 	logger := activity.GetLogger(ctx)
 	logger.Info("issued presigned S3 slice artifact lease",
 		"tenant_id", slice.TenantID,
