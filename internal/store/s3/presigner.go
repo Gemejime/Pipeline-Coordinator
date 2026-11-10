@@ -5,8 +5,6 @@ package s3
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -36,6 +34,8 @@ var (
 	ErrInvalidByteRange = errors.New("INVALID_ARGUMENT: invalid byte range bounds")
 	// ErrRangeReaderNotConfigured indicates that no RangeStreamGetter was wired into the Presigner.
 	ErrRangeReaderNotConfigured = errors.New("UNAVAILABLE: S3 range stream getter is not configured")
+	// ErrPresignAPINotConfigured indicates that no PresignAPI was configured for the presigner.
+	ErrPresignAPINotConfigured = errors.New("UNAVAILABLE: S3 presign API is not configured")
 )
 
 // PresignAPI abstracts the underlying AWS SDK v2 S3 presign and multipart operations.
@@ -69,12 +69,14 @@ type Presigner struct {
 	endpoint        string
 	region          string
 	maxLeaseSeconds int32
-	signingKey      []byte
 	nowFunc         func() time.Time
 }
 
-// NewPresigner constructs a Presigner with 15-minute lease enforcement.
-func NewPresigner(api PresignAPI, rangeGetter RangeStreamGetter, cfg PresignerConfig) *Presigner {
+// NewPresigner constructs a Presigner with 15-minute lease enforcement. It requires a configured PresignAPI.
+func NewPresigner(api PresignAPI, rangeGetter RangeStreamGetter, cfg PresignerConfig) (*Presigner, error) {
+	if api == nil {
+		return nil, ErrPresignAPINotConfigured
+	}
 	endpoint := strings.TrimRight(strings.TrimSpace(cfg.Endpoint), "/")
 	if endpoint == "" {
 		endpoint = DefaultS3Endpoint
@@ -87,10 +89,6 @@ func NewPresigner(api PresignAPI, rangeGetter RangeStreamGetter, cfg PresignerCo
 	if maxLease <= 0 || maxLease > DefaultPresignLeaseSeconds {
 		maxLease = DefaultPresignLeaseSeconds
 	}
-	signingKey := cfg.SigningKey
-	if signingKey == "" {
-		signingKey = "rag-coordinator-sts-ephemeral-signing-key"
-	}
 	nowFunc := cfg.NowFunc
 	if nowFunc == nil {
 		nowFunc = func() time.Time { return time.Now().UTC() }
@@ -101,9 +99,8 @@ func NewPresigner(api PresignAPI, rangeGetter RangeStreamGetter, cfg PresignerCo
 		endpoint:        endpoint,
 		region:          region,
 		maxLeaseSeconds: maxLease,
-		signingKey:      []byte(signingKey),
 		nowFunc:         nowFunc,
-	}
+	}, nil
 }
 
 // ClampLeaseSeconds enforces the 15-minute (900s) maximum S3 presigned URL lease.
@@ -128,6 +125,9 @@ func (p *Presigner) PutObject(
 	if err := ctx.Err(); err != nil {
 		return "", 0, 0, err
 	}
+	if p == nil || p.api == nil {
+		return "", 0, 0, ErrPresignAPINotConfigured
+	}
 	if err := validateBucketAndKey(bucket, key); err != nil {
 		return "", 0, 0, err
 	}
@@ -136,15 +136,10 @@ func (p *Presigner) PutObject(
 	now := p.now()
 	expiresAtUnix := now.Add(leaseDur).Unix()
 
-	if p.api != nil {
-		u, err := p.api.PresignPutObject(ctx, bucket, key, contentType, contentLength, leaseDur)
-		if err != nil {
-			return "", 0, 0, err
-		}
-		return u, expiresAtUnix, effectiveLease, nil
+	u, err := p.api.PresignPutObject(ctx, bucket, key, contentType, contentLength, leaseDur)
+	if err != nil {
+		return "", 0, 0, err
 	}
-
-	u := p.buildSignedURL("PUT", bucket, key, effectiveLease, now, nil)
 	return u, expiresAtUnix, effectiveLease, nil
 }
 
@@ -157,6 +152,9 @@ func (p *Presigner) GetObject(
 	if err := ctx.Err(); err != nil {
 		return "", 0, 0, err
 	}
+	if p == nil || p.api == nil {
+		return "", 0, 0, ErrPresignAPINotConfigured
+	}
 	if err := validateBucketAndKey(bucket, key); err != nil {
 		return "", 0, 0, err
 	}
@@ -165,15 +163,10 @@ func (p *Presigner) GetObject(
 	now := p.now()
 	expiresAtUnix := now.Add(leaseDur).Unix()
 
-	if p.api != nil {
-		u, err := p.api.PresignGetObject(ctx, bucket, key, leaseDur)
-		if err != nil {
-			return "", 0, 0, err
-		}
-		return u, expiresAtUnix, effectiveLease, nil
+	u, err := p.api.PresignGetObject(ctx, bucket, key, leaseDur)
+	if err != nil {
+		return "", 0, 0, err
 	}
-
-	u := p.buildSignedURL("GET", bucket, key, effectiveLease, now, nil)
 	return u, expiresAtUnix, effectiveLease, nil
 }
 
@@ -185,18 +178,14 @@ func (p *Presigner) CreateMultipartUpload(
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	if p == nil || p.api == nil {
+		return "", ErrPresignAPINotConfigured
+	}
 	if err := validateBucketAndKey(bucket, key); err != nil {
 		return "", err
 	}
 
-	if p.api != nil {
-		return p.api.CreateMultipartUpload(ctx, bucket, key, contentType)
-	}
-
-	mac := hmac.New(sha256.New, p.signingKey)
-	_, _ = mac.Write([]byte(bucket + "/" + key + "/" + contentType))
-	digest := hex.EncodeToString(mac.Sum(nil))[:24]
-	return "mp_upload_" + digest, nil
+	return p.api.CreateMultipartUpload(ctx, bucket, key, contentType)
 }
 
 // UploadPart issues a 15-minute presigned S3 UploadPart URL for a specific 1-based part number.
@@ -208,6 +197,9 @@ func (p *Presigner) UploadPart(
 ) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
+	}
+	if p == nil || p.api == nil {
+		return "", ErrPresignAPINotConfigured
 	}
 	if err := validateBucketAndKey(bucket, key); err != nil {
 		return "", err
@@ -222,14 +214,7 @@ func (p *Presigner) UploadPart(
 	effectiveLease := p.ClampLeaseSeconds(leaseSeconds)
 	leaseDur := time.Duration(effectiveLease) * time.Second
 
-	if p.api != nil {
-		return p.api.PresignUploadPart(ctx, bucket, key, uploadID, partNumber, leaseDur)
-	}
-
-	extra := url.Values{}
-	extra.Set("partNumber", fmt.Sprintf("%d", partNumber))
-	extra.Set("uploadId", uploadID)
-	return p.buildSignedURL("PUT", bucket, key, effectiveLease, p.now(), extra), nil
+	return p.api.PresignUploadPart(ctx, bucket, key, uploadID, partNumber, leaseDur)
 }
 
 // CompleteMultipartUpload finalizes an S3 multipart upload with the ordered list of part ETags.
@@ -241,6 +226,9 @@ func (p *Presigner) CompleteMultipartUpload(
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	if p == nil || p.api == nil {
+		return "", ErrPresignAPINotConfigured
+	}
 	if err := validateBucketAndKey(bucket, key); err != nil {
 		return "", err
 	}
@@ -251,11 +239,7 @@ func (p *Presigner) CompleteMultipartUpload(
 		return "", fmt.Errorf("%w: parts must not be empty", ErrInvalidS3Target)
 	}
 
-	if p.api != nil {
-		return p.api.CompleteMultipartUpload(ctx, bucket, key, uploadID, parts)
-	}
-
-	return fmt.Sprintf("s3://%s/%s", bucket, key), nil
+	return p.api.CompleteMultipartUpload(ctx, bucket, key, uploadID, parts)
 }
 
 // PresignSlice issues 15-minute presigned GET (raw input) and PUT (Parquet slice output) URLs
@@ -338,40 +322,42 @@ func (p *Presigner) now() time.Time {
 	return time.Now().UTC()
 }
 
-func (p *Presigner) buildSignedURL(
-	method, bucket, key string,
-	leaseSeconds int32,
-	now time.Time,
-	extraQuery url.Values,
-) string {
-	amzDate := now.Format("20060102T150405Z")
-	dateStamp := now.Format("20060102")
-	credential := fmt.Sprintf("AKIAIOSFODNN7EXAMPLE/%s/%s/s3/aws4_request", dateStamp, p.region)
+// FakePresignAPI provides a test-friendly in-memory PresignAPI implementation.
+type FakePresignAPI struct {
+	BaseEndpoint string
+	Region       string
+}
 
-	q := url.Values{}
-	for k, vals := range extraQuery {
-		for _, v := range vals {
-			q.Add(k, v)
-		}
+// NewFakePresignAPI constructs a FakePresignAPI with default or custom endpoint.
+func NewFakePresignAPI(endpoint, region string) *FakePresignAPI {
+	trimmed := strings.TrimRight(strings.TrimSpace(endpoint), "/")
+	if trimmed == "" {
+		trimmed = DefaultS3Endpoint
 	}
-	q.Set("X-Amz-Algorithm", "AWS4-HMAC-SHA256")
-	q.Set("X-Amz-Credential", credential)
-	q.Set("X-Amz-Date", amzDate)
-	q.Set("X-Amz-Expires", fmt.Sprintf("%d", leaseSeconds))
-	q.Set("X-Amz-SignedHeaders", "host")
-
-	mac := hmac.New(sha256.New, p.signingKey)
-	_, _ = mac.Write([]byte(method + "\n" + bucket + "\n" + key + "\n" + q.Encode()))
-	sig := hex.EncodeToString(mac.Sum(nil))
-	q.Set("X-Amz-Signature", sig)
-
-	host := strings.TrimPrefix(strings.TrimPrefix(p.endpoint, "https://"), "http://")
-	scheme := "https"
-	if strings.HasPrefix(p.endpoint, "http://") {
-		scheme = "http"
+	if region == "" {
+		region = DefaultS3Region
 	}
-	escapedKey := escapeS3KeyPath(key)
-	return fmt.Sprintf("%s://%s.%s/%s?%s", scheme, bucket, host, escapedKey, q.Encode())
+	return &FakePresignAPI{BaseEndpoint: trimmed, Region: region}
+}
+
+func (f *FakePresignAPI) PresignPutObject(_ context.Context, bucket, key, contentType string, contentLength int64, lease time.Duration) (string, error) {
+	return fmt.Sprintf("%s/%s/%s?X-Amz-Expires=%d&X-Amz-Signature=fake-sig", f.BaseEndpoint, bucket, escapeS3KeyPath(key), int(lease.Seconds())), nil
+}
+
+func (f *FakePresignAPI) PresignGetObject(_ context.Context, bucket, key string, lease time.Duration) (string, error) {
+	return fmt.Sprintf("%s/%s/%s?X-Amz-Expires=%d&X-Amz-Signature=fake-sig", f.BaseEndpoint, bucket, escapeS3KeyPath(key), int(lease.Seconds())), nil
+}
+
+func (f *FakePresignAPI) CreateMultipartUpload(_ context.Context, bucket, key, contentType string) (string, error) {
+	return fmt.Sprintf("mp_upload_%s_%s", bucket, hex.EncodeToString([]byte(key))[:16]), nil
+}
+
+func (f *FakePresignAPI) PresignUploadPart(_ context.Context, bucket, key, uploadID string, partNumber int32, lease time.Duration) (string, error) {
+	return fmt.Sprintf("%s/%s/%s?partNumber=%d&uploadId=%s&X-Amz-Expires=%d&X-Amz-Signature=fake-sig", f.BaseEndpoint, bucket, escapeS3KeyPath(key), partNumber, uploadID, int(lease.Seconds())), nil
+}
+
+func (f *FakePresignAPI) CompleteMultipartUpload(_ context.Context, bucket, key, uploadID string, parts []coordinatorv1.CompletedPart) (string, error) {
+	return fmt.Sprintf("s3://%s/%s", bucket, key), nil
 }
 
 func escapeS3KeyPath(key string) string {

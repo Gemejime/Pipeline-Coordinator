@@ -3,13 +3,12 @@ package activity
 import (
 	"context"
 	"errors"
-	"fmt"
 	"math"
 	"strings"
-	"time"
 
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
+	"go.temporal.io/sdk/worker"
 
 	coordinatorv1 "rag-ingestion-coordinator/api/proto/v1"
 	"rag-ingestion-coordinator/internal/service"
@@ -18,6 +17,13 @@ import (
 const (
 	// DefaultPresignLeaseSeconds is the mandatory 15-minute (900s) S3 presigned URL lease.
 	DefaultPresignLeaseSeconds int32 = 900
+	// PresignS3ArtifactActivityName is the canonical activity registration name.
+	PresignS3ArtifactActivityName = "PresignS3ArtifactActivity"
+)
+
+var (
+	// ErrPresignerNotConfigured indicates that PresignActivities has no SlicePresigner configured.
+	ErrPresignerNotConfigured = errors.New("UNAVAILABLE: slice presigner is not configured")
 )
 
 // SlicePresigner generates scoped S3 GET and PUT presigned URLs for a partition slice.
@@ -35,14 +41,28 @@ func NewPresignActivities(presigner SlicePresigner) *PresignActivities {
 	return &PresignActivities{Presigner: presigner}
 }
 
+// Register binds the dependency-backed PresignS3Artifact activity method under
+// PresignS3ArtifactActivityName on the provided Temporal ActivityRegistry.
+// It returns ErrPresignerNotConfigured if the receiver or its Presigner is nil.
+func (a *PresignActivities) Register(reg worker.ActivityRegistry) error {
+	if a == nil || a.Presigner == nil {
+		return ErrPresignerNotConfigured
+	}
+	reg.RegisterActivityWithOptions(
+		a.PresignS3Artifact,
+		activity.RegisterOptions{Name: PresignS3ArtifactActivityName},
+	)
+	return nil
+}
+
 // PresignS3ArtifactActivity executes on coordinator-task-queue to issue short-lived
 // (15-minute / 900s) presigned S3 GET and PUT URLs for a child partition slice.
-// Presigned URLs are strictly redacted from all log entries.
+// Direct execution without a dependency-bound PresignActivities instance returns ErrPresignerNotConfigured.
 func PresignS3ArtifactActivity(
 	ctx context.Context,
 	req coordinatorv1.PresignSliceArtifactRequest,
 ) (*coordinatorv1.PresignSliceArtifactResponse, error) {
-	a := &PresignActivities{}
+	var a *PresignActivities
 	return a.PresignS3Artifact(ctx, req)
 }
 
@@ -54,6 +74,13 @@ func (a *PresignActivities) PresignS3Artifact(
 ) (*coordinatorv1.PresignSliceArtifactResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if a == nil || a.Presigner == nil {
+		return nil, temporal.NewNonRetryableApplicationError(
+			"slice presigner is not configured",
+			ErrCodeInvalidArgument,
+			ErrPresignerNotConfigured,
+		)
 	}
 
 	slice := req.Slice
@@ -124,31 +151,10 @@ func (a *PresignActivities) PresignS3Artifact(
 	}
 	req.LeaseSeconds = leaseSeconds
 
-	if a != nil && a.Presigner != nil {
-		resp, err := a.Presigner.PresignSlice(ctx, req)
-		if err != nil {
-			return nil, err
-		}
-		logRedactedPresignEvent(ctx, slice, leaseSeconds)
-		return resp, nil
+	resp, err := a.Presigner.PresignSlice(ctx, req)
+	if err != nil {
+		return nil, err
 	}
-
-	expiresAtUnix := time.Now().UTC().Add(time.Duration(leaseSeconds) * time.Second).Unix()
-	resp := &coordinatorv1.PresignSliceArtifactResponse{
-		S3Bucket:           slice.S3InputBucket,
-		S3InputKey:         slice.S3InputKey,
-		S3OutputParquetKey: slice.S3OutputParquetKey,
-		PresignedInputGetURL: fmt.Sprintf(
-			"https://%s.s3.amazonaws.com/%s?X-Amz-Expires=%d",
-			slice.S3InputBucket, slice.S3InputKey, leaseSeconds,
-		),
-		PresignedOutputPutURL: fmt.Sprintf(
-			"https://%s.s3.amazonaws.com/%s?X-Amz-Expires=%d",
-			slice.S3InputBucket, slice.S3OutputParquetKey, leaseSeconds,
-		),
-		ExpiresAtUnix: expiresAtUnix,
-	}
-
 	logRedactedPresignEvent(ctx, slice, leaseSeconds)
 	return resp, nil
 }

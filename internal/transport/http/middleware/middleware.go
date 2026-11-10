@@ -110,8 +110,7 @@ func NewStaticTokenValidator(tokens map[string]AuthClaims) *StaticTokenValidator
 	return &StaticTokenValidator{tokens: copied}
 }
 
-// ValidateToken validates rawToken against registered static tokens or parses a structured
-// test/service token of the form "tenant:<tenant_id>;scopes:<comma_separated_scopes>" or JWT payload.
+// ValidateToken validates rawToken strictly against registered static tokens.
 func (v *StaticTokenValidator) ValidateToken(_ context.Context, rawToken string) (*AuthClaims, error) {
 	trimmed := strings.TrimSpace(rawToken)
 	if trimmed == "" {
@@ -130,23 +129,59 @@ func (v *StaticTokenValidator) ValidateToken(_ context.Context, rawToken string)
 		}
 	}
 
-	// Support structured tokens: "tenant:<tenant_id>;scopes:<scope1>,<scope2>"
-	if strings.HasPrefix(trimmed, "tenant:") {
-		claims, err := parseStructuredToken(trimmed)
-		if err != nil {
-			return nil, err
-		}
-		return claims, nil
+	return nil, ErrInvalidBearerToken
+}
+
+// TestTokenValidator is an explicit test-only validator that parses self-asserted
+// structured tokens and unsigned JWT payloads without verifying signatures.
+type TestTokenValidator struct {
+	*StaticTokenValidator
+}
+
+// NewTestTokenValidator constructs an explicit test-only TokenValidator allowing
+// self-asserted structured tokens and unsigned JWT payloads.
+func NewTestTokenValidator(tokens map[string]AuthClaims) *TestTokenValidator {
+	return &TestTokenValidator{
+		StaticTokenValidator: NewStaticTokenValidator(tokens),
+	}
+}
+
+// ValidateToken validates rawToken against registered tokens, or parses structured / JWT tokens for tests.
+func (v *TestTokenValidator) ValidateToken(ctx context.Context, rawToken string) (*AuthClaims, error) {
+	trimmed := strings.TrimSpace(rawToken)
+	if trimmed == "" {
+		return nil, ErrMissingBearerToken
 	}
 
-	// Support 3-part JWT tokens in local/gateway pass-through mode when registered tokens are empty.
-	if v == nil || len(v.tokens) == 0 {
-		if claims, err := parseJWTClaimsPayload(trimmed); err == nil {
+	if v != nil && v.StaticTokenValidator != nil {
+		if claims, err := v.StaticTokenValidator.ValidateToken(ctx, trimmed); err == nil {
 			return claims, nil
 		}
 	}
 
+	// Support structured tokens: "tenant:<tenant_id>;scopes:<scope1>,<scope2>"
+	if strings.HasPrefix(trimmed, "tenant:") {
+		return parseStructuredToken(trimmed)
+	}
+
+	// Support 3-part JWT tokens in test mode
+	if claims, err := parseJWTClaimsPayload(trimmed); err == nil {
+		return claims, nil
+	}
+
 	return nil, ErrInvalidBearerToken
+}
+
+// failClosedTokenValidator always rejects validation attempts, failing closed.
+type failClosedTokenValidator struct{}
+
+func (failClosedTokenValidator) ValidateToken(_ context.Context, _ string) (*AuthClaims, error) {
+	return nil, ErrInvalidBearerToken
+}
+
+// NewFailClosedTokenValidator constructs a validator that always fails closed.
+func NewFailClosedTokenValidator() TokenValidator {
+	return failClosedTokenValidator{}
 }
 
 func parseStructuredToken(token string) (*AuthClaims, error) {

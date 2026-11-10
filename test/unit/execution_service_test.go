@@ -294,6 +294,21 @@ func TestExecutionService_GetWorkflowStatus(t *testing.T) {
 		assert.ErrorIs(t, err, service.ErrTenantMismatch)
 	})
 
+	t.Run("workflow ID cross-tenant ownership mismatch fails before lookups", func(t *testing.T) {
+		t.Parallel()
+		mockClient := &mockTemporalClient{
+			queryWorkflowFn: func(ctx context.Context, wfID, runID, qType string, args ...any) (converter.EncodedValue, error) {
+				t.Fatal("queryWorkflowFn should not be invoked on workflow ID tenant mismatch")
+				return nil, nil
+			},
+		}
+
+		svc := service.NewExecutionService(mockClient, service.ExecutionServiceConfig{})
+		_, err := svc.GetWorkflowStatus(context.Background(), "ingest-other-tenant-hash123", tenantID)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, service.ErrTenantMismatch)
+	})
+
 	t.Run("fallback to TerminalRunReader when query fails", func(t *testing.T) {
 		t.Parallel()
 		mockClient := &mockTemporalClient{

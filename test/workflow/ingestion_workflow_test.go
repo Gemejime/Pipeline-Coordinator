@@ -16,8 +16,17 @@ import (
 
 	coordinatorv1 "rag-ingestion-coordinator/api/proto/v1"
 	"rag-ingestion-coordinator/internal/activity"
+	"rag-ingestion-coordinator/internal/store/s3"
 	"rag-ingestion-coordinator/internal/workflow"
 )
+
+func registerTestPresignActivity(t *testing.T, env *testsuite.TestWorkflowEnvironment) {
+	t.Helper()
+	p, err := s3.NewPresigner(s3.NewFakePresignAPI("https://s3.amazonaws.com", "us-east-1"), nil, s3.PresignerConfig{})
+	require.NoError(t, err)
+	presignActs := activity.NewPresignActivities(p)
+	require.NoError(t, presignActs.Register(env))
+}
 
 // TestDocumentPartitionWorkflow_Success verifies the per-slice child workflow activity sequence and custom PipelineConfig propagation.
 func TestDocumentPartitionWorkflow_Success(t *testing.T) {
@@ -26,7 +35,7 @@ func TestDocumentPartitionWorkflow_Success(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
 
-	env.RegisterActivity(activity.PresignS3ArtifactActivity)
+	registerTestPresignActivity(t, env)
 	env.RegisterActivity(activity.DispatchDocAIExtractActivity)
 	env.RegisterActivity(activity.CompileChunksActivity)
 
@@ -237,7 +246,7 @@ func TestIngestionCoordinatorWorkflow_EndToEnd_And_QueryStatus(t *testing.T) {
 
 	env.RegisterWorkflow(workflow.DocumentPartitionWorkflow)
 	env.RegisterActivity(activity.InspectDocumentHeaderActivity)
-	env.RegisterActivity(activity.PresignS3ArtifactActivity)
+	registerTestPresignActivity(t, env)
 	env.RegisterActivity(activity.DispatchDocAIExtractActivity)
 	env.RegisterActivity(activity.CompileChunksActivity)
 
@@ -348,7 +357,7 @@ func TestIngestionCoordinatorWorkflow_HistoryLimit_20000Pages(t *testing.T) {
 
 		env.RegisterWorkflow(workflow.DocumentPartitionWorkflow)
 		env.RegisterActivity(activity.InspectDocumentHeaderActivity)
-		env.RegisterActivity(activity.PresignS3ArtifactActivity)
+		registerTestPresignActivity(t, env)
 		env.RegisterActivity(activity.DispatchDocAIExtractActivity)
 		env.RegisterActivity(activity.CompileChunksActivity)
 		env.RegisterActivity(activity.PublishMilestoneActivity)
@@ -428,7 +437,7 @@ func TestIngestionCoordinatorWorkflow_PoisonPillSliceIsolation(t *testing.T) {
 
 	env.RegisterWorkflow(workflow.DocumentPartitionWorkflow)
 	env.RegisterActivity(activity.InspectDocumentHeaderActivity)
-	env.RegisterActivity(activity.PresignS3ArtifactActivity)
+	registerTestPresignActivity(t, env)
 	env.RegisterActivity(activity.DispatchDocAIExtractActivity)
 	env.RegisterActivity(activity.CompileChunksActivity)
 	env.RegisterActivity(activity.PublishMilestoneActivity)

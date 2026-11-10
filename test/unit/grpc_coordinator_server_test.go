@@ -274,4 +274,3 @@ func TestGRPC_GetIngestionStatus(t *testing.T) {
 		assert.Equal(t, codes.NotFound, st.Code())
 	})
 }
-

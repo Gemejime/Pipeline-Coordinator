@@ -28,11 +28,11 @@ const (
 
 var (
 	// SearchAttrTenantID maps to the typed Search Attribute "TenantID" in Temporal.
-	SearchAttrTenantID = temporal.NewSearchAttributeKeyString("TenantID")
+	SearchAttrTenantID = temporal.NewSearchAttributeKeyKeyword("TenantID")
 	// SearchAttrDocumentID maps to the typed Search Attribute "DocumentID" in Temporal.
-	SearchAttrDocumentID = temporal.NewSearchAttributeKeyString("DocumentID")
+	SearchAttrDocumentID = temporal.NewSearchAttributeKeyKeyword("DocumentID")
 	// SearchAttrPipelineRunID maps to the typed Search Attribute "PipelineRunID" in Temporal.
-	SearchAttrPipelineRunID = temporal.NewSearchAttributeKeyString("PipelineRunID")
+	SearchAttrPipelineRunID = temporal.NewSearchAttributeKeyKeyword("PipelineRunID")
 )
 
 var (
@@ -243,6 +243,10 @@ func (s *ExecutionService) GetWorkflowStatus(
 		return nil, fmt.Errorf("%w: workflow_id is required", ErrInvalidExecutionRequest)
 	}
 
+	if err := ValidateIngestionWorkflowOwnership(cleanWorkflowID, validTenant); err != nil {
+		return nil, err
+	}
+
 	// Step 1: Query live workflow state via QueryTypeIngestionStatus ("ingestion_status").
 	queryVal, queryErr := s.client.QueryWorkflow(ctx, cleanWorkflowID, "", QueryTypeIngestionStatus)
 	if queryErr == nil {
@@ -342,6 +346,27 @@ func (s *ExecutionService) GetWorkflowStatus(
 // BuildIngestionWorkflowID computes the deterministic idempotent workflow ID: ingest-<tenant_id>-<content_hash>.
 func BuildIngestionWorkflowID(tenantID, contentHash string) string {
 	return fmt.Sprintf("ingest-%s-%s", tenantID, contentHash)
+}
+
+// ValidateIngestionWorkflowOwnership checks whether the root workflow ID adheres to the established
+// format (ingest-<tenant_id>-<content_hash>) and matches the provided valid tenant.
+func ValidateIngestionWorkflowOwnership(workflowID, validTenant string) error {
+	trimmed := strings.TrimSpace(workflowID)
+	if trimmed == "" {
+		return fmt.Errorf("%w: workflow_id is required", ErrInvalidExecutionRequest)
+	}
+	expectedPrefix := fmt.Sprintf("ingest-%s-", validTenant)
+	if strings.HasPrefix(trimmed, expectedPrefix) {
+		contentHash := strings.TrimPrefix(trimmed, expectedPrefix)
+		if strings.TrimSpace(contentHash) == "" {
+			return fmt.Errorf("%w: workflow_id %q is missing content hash", ErrInvalidExecutionRequest, workflowID)
+		}
+		return nil
+	}
+	if strings.HasPrefix(trimmed, "ingest-") {
+		return fmt.Errorf("%w: workflow ID %q does not match tenant %q", ErrTenantMismatch, workflowID, validTenant)
+	}
+	return fmt.Errorf("%w: workflow_id %q does not match established format ingest-<tenant_id>-<content_hash>", ErrInvalidExecutionRequest, workflowID)
 }
 
 func validateDocumentIdentifier(documentID string) (string, error) {

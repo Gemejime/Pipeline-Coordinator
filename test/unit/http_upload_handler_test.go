@@ -22,7 +22,8 @@ import (
 func setupTestServer(t *testing.T, logBuf *bytes.Buffer) (http.Handler, *middleware.TokenBucketLimiter) {
 	t.Helper()
 
-	presigner := s3.NewPresigner(nil, nil, s3.PresignerConfig{})
+	presigner, err := s3.NewPresigner(s3.NewFakePresignAPI("https://s3.amazonaws.com", "us-east-1"), nil, s3.PresignerConfig{})
+	require.NoError(t, err)
 	uploadSvc := service.NewUploadService(presigner, service.UploadServiceConfig{
 		DefaultBucket: "rag-ingestion-bucket",
 		LeaseSeconds:  900,
@@ -263,8 +264,10 @@ func TestHTTP_PayloadLimitsAndProbes(t *testing.T) {
 			RequestsPerSecond: 1,
 			Burst:             1,
 		})
+		p, err := s3.NewPresigner(s3.NewFakePresignAPI("https://s3.amazonaws.com", "us-east-1"), nil, s3.PresignerConfig{})
+		require.NoError(t, err)
 		strictRouter := transporthttp.NewRouter(transporthttp.RouterConfig{
-			UploadHandler: transporthttp.NewUploadHandler(service.NewUploadService(s3.NewPresigner(nil, nil, s3.PresignerConfig{}), service.UploadServiceConfig{
+			UploadHandler: transporthttp.NewUploadHandler(service.NewUploadService(p, service.UploadServiceConfig{
 				DefaultBucket: "rag-ingestion-bucket",
 			}), nil),
 			TokenValidator: middleware.NewStaticTokenValidator(map[string]middleware.AuthClaims{

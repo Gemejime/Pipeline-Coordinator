@@ -38,7 +38,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 	validator := cfg.TokenValidator
 	if validator == nil {
-		validator = middleware.NewStaticTokenValidator(nil)
+		validator = middleware.NewFailClosedTokenValidator()
 	}
 
 	limiter := cfg.RateLimiter

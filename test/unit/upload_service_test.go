@@ -24,12 +24,14 @@ func TestUploadService_SinglePartAndMultipartHandoff(t *testing.T) {
 	t.Parallel()
 
 	fixedNow := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
-	presigner := s3.NewPresigner(nil, nil, s3.PresignerConfig{
+	fakeAPI := s3.NewFakePresignAPI("https://s3.amazonaws.com", "us-east-1")
+	presigner, err := s3.NewPresigner(fakeAPI, nil, s3.PresignerConfig{
 		Endpoint:        "https://s3.amazonaws.com",
 		Region:          "us-east-1",
 		MaxLeaseSeconds: 1800, // Should clamp to 900s (15m)
 		NowFunc:         func() time.Time { return fixedNow },
 	})
+	require.NoError(t, err)
 	uploadSvc := service.NewUploadService(presigner, service.UploadServiceConfig{
 		DefaultBucket: "rag-ingestion-bucket",
 		LeaseSeconds:  3600, // Should clamp to 900s (15m)
@@ -96,7 +98,8 @@ func TestUploadService_SinglePartAndMultipartHandoff(t *testing.T) {
 func TestUploadService_ValidationGuards(t *testing.T) {
 	t.Parallel()
 
-	presigner := s3.NewPresigner(nil, nil, s3.PresignerConfig{})
+	presigner, err := s3.NewPresigner(s3.NewFakePresignAPI("https://s3.amazonaws.com", "us-east-1"), nil, s3.PresignerConfig{})
+	require.NoError(t, err)
 	uploadSvc := service.NewUploadService(presigner, service.UploadServiceConfig{
 		DefaultBucket: "rag-ingestion-bucket",
 	})
@@ -156,7 +159,8 @@ func TestUploadService_ValidationGuards(t *testing.T) {
 func TestUploadService_CompleteMultipartUpload_Validation(t *testing.T) {
 	t.Parallel()
 
-	presigner := s3.NewPresigner(nil, nil, s3.PresignerConfig{})
+	presigner, err := s3.NewPresigner(s3.NewFakePresignAPI("https://s3.amazonaws.com", "us-east-1"), nil, s3.PresignerConfig{})
+	require.NoError(t, err)
 	uploadSvc := service.NewUploadService(presigner, service.UploadServiceConfig{
 		DefaultBucket: "rag-ingestion-bucket",
 	})
@@ -232,9 +236,10 @@ func TestPresignActivities_EnforcesTenantAndDeterministicArtifactKeys(t *testing
 	t.Parallel()
 
 	// Configure S3 Presigner with a RangeStreamGetter returning a 256 KiB stream to verify the 64 KiB LimitReader cap.
-	presigner := s3.NewPresigner(nil, rangeStreamFunc(func(_ context.Context, _, _, _ string) (io.ReadCloser, error) {
+	presigner, err := s3.NewPresigner(s3.NewFakePresignAPI("https://s3.amazonaws.com", "us-east-1"), rangeStreamFunc(func(_ context.Context, _, _, _ string) (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(bytes.Repeat([]byte("A"), 256*1024))), nil
 	}), s3.PresignerConfig{})
+	require.NoError(t, err)
 
 	data, err := presigner.ReadRange(context.Background(), "rag-ingestion-bucket", "raw/tenant-corp-01/hash/doc.pdf", 0, 128*1024)
 	require.NoError(t, err)
@@ -284,6 +289,28 @@ func TestPresignActivities_EnforcesTenantAndDeterministicArtifactKeys(t *testing
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "TENANT_MISMATCH")
+}
+
+func TestPresigner_RequiresConfiguredAPI(t *testing.T) {
+	t.Parallel()
+
+	// NewPresigner fails when api is nil
+	_, err := s3.NewPresigner(nil, nil, s3.PresignerConfig{})
+	require.ErrorIs(t, err, s3.ErrPresignAPINotConfigured)
+
+	// PresignS3Artifact fails when presigner is nil
+	unconfiguredActs := activity.NewPresignActivities(nil)
+	_, err = unconfiguredActs.PresignS3Artifact(context.Background(), coordinatorv1.PresignSliceArtifactRequest{
+		Slice: coordinatorv1.PartitionSlice{
+			SliceID:       "slice-01",
+			TenantID:      "tenant-01",
+			DocumentID:    "doc-01",
+			S3InputBucket: "bucket",
+			S3InputKey:    "raw/tenant-01/hash/file.pdf",
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "slice presigner is not configured")
 }
 
 type rangeStreamFunc func(ctx context.Context, bucket, key, rangeHeader string) (io.ReadCloser, error)

@@ -9,6 +9,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	"rag-ingestion-coordinator/internal/activity"
+	"rag-ingestion-coordinator/internal/service"
 )
 
 const (
@@ -47,11 +48,11 @@ const (
 
 var (
 	// SearchAttrTenantID indexes workflow executions by TenantID.
-	SearchAttrTenantID = temporal.NewSearchAttributeKeyKeyword("TenantID")
+	SearchAttrTenantID = service.SearchAttrTenantID
 	// SearchAttrDocumentID indexes workflow executions by DocumentID.
-	SearchAttrDocumentID = temporal.NewSearchAttributeKeyKeyword("DocumentID")
+	SearchAttrDocumentID = service.SearchAttrDocumentID
 	// SearchAttrPipelineRunID indexes workflow executions by PipelineRunID.
-	SearchAttrPipelineRunID = temporal.NewSearchAttributeKeyKeyword("PipelineRunID")
+	SearchAttrPipelineRunID = service.SearchAttrPipelineRunID
 )
 
 // NonRetryableErrorTypes returns the canonical error codes that must fail-fast
