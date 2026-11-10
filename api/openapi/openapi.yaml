@@ -42,6 +42,35 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden (cross-tenant mismatch or missing ingest:write scope)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Control-plane JSON request body exceeds 64 KiB ceiling
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit exceeded
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /v1/ingest/upload-url/complete:
     post:
@@ -66,6 +95,35 @@ paths:
                 $ref: '#/components/schemas/CompleteMultipartUploadResponse'
         '400':
           description: Bad part manifest or missing parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden (cross-tenant mismatch or missing ingest:write scope)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Control-plane JSON request body exceeds 64 KiB ceiling
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit exceeded
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying
+              schema:
+                type: integer
           content:
             application/json:
               schema:
@@ -189,6 +247,34 @@ paths:
                         example: connected
         '503':
           description: Service dependencies unavailable
+
+  /openapi.yaml:
+    get:
+      summary: OpenAPI Specification
+      description: Raw OpenAPI 3.1 YAML specification.
+      operationId: getOpenAPISpec
+      security: []
+      responses:
+        '200':
+          description: OpenAPI 3.1 YAML document
+          content:
+            application/yaml:
+              schema:
+                type: string
+
+  /docs:
+    get:
+      summary: Swagger UI Documentation
+      description: Interactive Swagger UI documentation page.
+      operationId: getDocs
+      security: []
+      responses:
+        '200':
+          description: HTML page rendering Swagger UI
+          content:
+            text/html:
+              schema:
+                type: string
 
   /metrics:
     get:
