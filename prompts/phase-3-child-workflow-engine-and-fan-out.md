@@ -116,7 +116,7 @@ Following the architectural blueprints in [`tasks/RAG Ingestion Coordinator Impl
 2. **Unit Tests**:
    - Go unit tests: `go test -v ./test/unit/execution_service_test.go`
    - HTTP transport tests: `go test -v ./test/unit/http_execution_handler_test.go`
-   - gRPC server tests: `go test -v ./test/unit/grpc_coordinator_server_test.go`
+   - gRPC server tests: `go test -v -run "^TestGRPC_" ./test/unit/...`
    - Python unit tests: `pytest workers/python/tests/` (or `python -m unittest discover workers/python/tests`)
    - Full suite: `go test -v ./test/unit/... ./test/workflow/...`
 3. **Contract & Spec Sync**:

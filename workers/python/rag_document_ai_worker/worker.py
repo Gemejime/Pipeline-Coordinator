@@ -60,6 +60,7 @@ async def run_worker() -> None:
     stop_event = asyncio.Event()
 
     def _signal_handler() -> None:
+        """Sets the stop event upon receiving an interruption or termination signal."""
         logger.info("Received termination signal, initiating graceful worker drain...")
         stop_event.set()
 

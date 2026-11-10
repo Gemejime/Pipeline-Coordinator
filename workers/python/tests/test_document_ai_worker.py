@@ -30,6 +30,7 @@ class TestDocumentAIModels(unittest.TestCase):
     """Verifies Pydantic v2 schemas and validation contracts."""
 
     def test_pipeline_config_defaults(self):
+        """Verifies default values and field assignment for PipelineConfig."""
         cfg = PipelineConfig(tenant_id="tenant-corp-01")
         self.assertEqual(cfg.id, "default-multimodal-v1")
         self.assertEqual(cfg.chunk_size_tokens, 300)
@@ -37,6 +38,7 @@ class TestDocumentAIModels(unittest.TestCase):
         self.assertTrue(cfg.ocr_enabled)
 
     def test_partition_slice_validation(self):
+        """Verifies PartitionSlice field parsing and modality mapping."""
         data = {
             "slice_id": "slice-001",
             "slice_index": 1,
@@ -58,6 +60,7 @@ class TestDocumentAIModels(unittest.TestCase):
         self.assertEqual(slice_obj.end_page, 50)
 
     def test_heartbeat_details_roundtrip(self):
+        """Verifies serializing and deserializing HeartbeatDetails preserves fields."""
         hb = HeartbeatDetails(
             slice_id="slice-001",
             slice_index=1,
@@ -77,6 +80,7 @@ class TestParquetGeneration(unittest.TestCase):
     """Verifies PyArrow Parquet table construction and column schema."""
 
     def test_build_parquet_slice(self):
+        """Verifies PyArrow Parquet table construction and column schema."""
         slice_obj = PartitionSlice(
             slice_id="slice-test-01",
             slice_index=1,
@@ -131,6 +135,7 @@ class TestDispatchDocAIExtractActivity(unittest.IsolatedAsyncioTestCase):
     """Verifies DispatchDocAIExtractActivity execution and heartbeat resumption."""
 
     async def test_activity_fresh_execution(self):
+        """Verifies activity execution from unit 1 when no heartbeat checkpoint exists."""
         env = ActivityEnvironment()
         heartbeats = []
         env.on_heartbeat = lambda *args: heartbeats.append(args)
