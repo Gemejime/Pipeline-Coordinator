@@ -3,8 +3,6 @@ package workflow
 import (
 	"errors"
 	"fmt"
-
-	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
@@ -343,9 +341,8 @@ func IngestionCoordinatorWorkflow(ctx workflow.Context, req IngestionRequest) (*
 
 		childWorkflowID := fmt.Sprintf("%s-slice-%05d", rootWorkflowID, slice.SliceIndex)
 		childOpts := workflow.ChildWorkflowOptions{
-			WorkflowID:        childWorkflowID,
-			TaskQueue:         CoordinatorTaskQueue,
-			ParentClosePolicy: enumspb.PARENT_CLOSE_POLICY_REQUEST_CANCEL,
+			WorkflowID: childWorkflowID,
+			TaskQueue:  CoordinatorTaskQueue,
 		}
 		childCtx := workflow.WithChildOptions(ctx, childOpts)
 		future := workflow.ExecuteChildWorkflow(childCtx, DocumentPartitionWorkflow, slice)

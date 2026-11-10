@@ -16,13 +16,14 @@ type ReadinessCheckFunc func(ctx context.Context) map[string]string
 
 // RouterConfig configures the HTTP transport router and middleware stack.
 type RouterConfig struct {
-	UploadHandler  *UploadHandler
-	TokenValidator middleware.TokenValidator
-	RateLimiter    *middleware.TokenBucketLimiter
-	Logger         *slog.Logger
-	ReadinessCheck ReadinessCheckFunc
-	OpenAPIPath    string
-	OpenAPISpec    []byte
+	UploadHandler    *UploadHandler
+	ExecutionHandler *ExecutionHandler
+	TokenValidator   middleware.TokenValidator
+	RateLimiter      *middleware.TokenBucketLimiter
+	Logger           *slog.Logger
+	ReadinessCheck   ReadinessCheckFunc
+	OpenAPIPath      string
+	OpenAPISpec      []byte
 }
 
 // NewRouter constructs the standard library net/http router with RequestID,
@@ -65,6 +66,28 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		)
 		mux.Handle("POST /v1/ingest/upload-url", createChain)
 		mux.Handle("POST /v1/ingest/upload-url/complete", completeChain)
+	}
+
+	executionHandler := cfg.ExecutionHandler
+	if executionHandler != nil {
+		startChain := middleware.RequireAuth(
+			validator,
+			middleware.ScopeIngestWrite,
+			middleware.RateLimit(
+				limiter,
+				http.HandlerFunc(executionHandler.HandleStartIngestion),
+			),
+		)
+		statusChain := middleware.RequireAuth(
+			validator,
+			middleware.ScopeIngestRead,
+			middleware.RateLimit(
+				limiter,
+				http.HandlerFunc(executionHandler.HandleGetIngestionStatus),
+			),
+		)
+		mux.Handle("POST /v1/ingest/workflows/start", startChain)
+		mux.Handle("GET /v1/ingest/workflows/{id}/status", statusChain)
 	}
 
 	mux.HandleFunc("GET /healthz", handleLivenessProbe)

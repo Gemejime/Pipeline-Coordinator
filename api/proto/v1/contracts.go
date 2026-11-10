@@ -2,7 +2,203 @@
 // corresponding to api/proto/v1/coordinator.proto and api/proto/v1/types.proto.
 package coordinatorv1
 
-import "log/slog"
+import (
+	"context"
+	"encoding/json"
+	"log/slog"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/encoding"
+)
+
+func init() {
+	if encoding.GetCodec("json") == nil {
+		encoding.RegisterCodec(JSONCodec{})
+	}
+}
+
+// JSONCodec implements google.golang.org/grpc/encoding.Codec to serialize
+// and deserialize contract types without requiring external protoc code generation.
+type JSONCodec struct{}
+
+// Marshal serializes v to JSON bytes.
+func (JSONCodec) Marshal(v any) ([]byte, error) {
+	return json.Marshal(v)
+}
+
+// Unmarshal parses JSON data into v.
+func (JSONCodec) Unmarshal(data []byte, v any) error {
+	return json.Unmarshal(data, v)
+}
+
+// Name returns the registered codec content-subtype name "json".
+func (JSONCodec) Name() string {
+	return "json"
+}
+
+// CoordinatorServiceServer is the server API for CoordinatorService.
+type CoordinatorServiceServer interface {
+	CreateUploadURL(context.Context, *CreateUploadURLRequest) (*CreateUploadURLResponse, error)
+	CompleteUploadURL(context.Context, *CompleteMultipartUploadRequest) (*CompleteMultipartUploadResponse, error)
+	StartIngestion(context.Context, *StartIngestionRequest) (*StartIngestionResponse, error)
+	GetIngestionStatus(context.Context, *GetIngestionStatusRequest) (*GetIngestionStatusResponse, error)
+}
+
+// CoordinatorServiceClient is the client API for CoordinatorService.
+type CoordinatorServiceClient interface {
+	CreateUploadURL(ctx context.Context, in *CreateUploadURLRequest, opts ...grpc.CallOption) (*CreateUploadURLResponse, error)
+	CompleteUploadURL(ctx context.Context, in *CompleteMultipartUploadRequest, opts ...grpc.CallOption) (*CompleteMultipartUploadResponse, error)
+	StartIngestion(ctx context.Context, in *StartIngestionRequest, opts ...grpc.CallOption) (*StartIngestionResponse, error)
+	GetIngestionStatus(ctx context.Context, in *GetIngestionStatusRequest, opts ...grpc.CallOption) (*GetIngestionStatusResponse, error)
+}
+
+type coordinatorServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+// NewCoordinatorServiceClient constructs a CoordinatorServiceClient over the provided gRPC connection.
+func NewCoordinatorServiceClient(cc grpc.ClientConnInterface) CoordinatorServiceClient {
+	return &coordinatorServiceClient{cc: cc}
+}
+
+func (c *coordinatorServiceClient) CreateUploadURL(ctx context.Context, in *CreateUploadURLRequest, opts ...grpc.CallOption) (*CreateUploadURLResponse, error) {
+	out := new(CreateUploadURLResponse)
+	callOpts := append([]grpc.CallOption{grpc.CallContentSubtype("json")}, opts...)
+	if err := c.cc.Invoke(ctx, "/rag.coordinator.v1.CoordinatorService/CreateUploadURL", in, out, callOpts...); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *coordinatorServiceClient) CompleteUploadURL(ctx context.Context, in *CompleteMultipartUploadRequest, opts ...grpc.CallOption) (*CompleteMultipartUploadResponse, error) {
+	out := new(CompleteMultipartUploadResponse)
+	callOpts := append([]grpc.CallOption{grpc.CallContentSubtype("json")}, opts...)
+	if err := c.cc.Invoke(ctx, "/rag.coordinator.v1.CoordinatorService/CompleteUploadURL", in, out, callOpts...); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *coordinatorServiceClient) StartIngestion(ctx context.Context, in *StartIngestionRequest, opts ...grpc.CallOption) (*StartIngestionResponse, error) {
+	out := new(StartIngestionResponse)
+	callOpts := append([]grpc.CallOption{grpc.CallContentSubtype("json")}, opts...)
+	if err := c.cc.Invoke(ctx, "/rag.coordinator.v1.CoordinatorService/StartIngestion", in, out, callOpts...); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *coordinatorServiceClient) GetIngestionStatus(ctx context.Context, in *GetIngestionStatusRequest, opts ...grpc.CallOption) (*GetIngestionStatusResponse, error) {
+	out := new(GetIngestionStatusResponse)
+	callOpts := append([]grpc.CallOption{grpc.CallContentSubtype("json")}, opts...)
+	if err := c.cc.Invoke(ctx, "/rag.coordinator.v1.CoordinatorService/GetIngestionStatus", in, out, callOpts...); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// CoordinatorService_ServiceDesc is the grpc.ServiceDesc for CoordinatorService.
+var CoordinatorService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "rag.coordinator.v1.CoordinatorService",
+	HandlerType: (*CoordinatorServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "CreateUploadURL",
+			Handler:    _CoordinatorService_CreateUploadURL_Handler,
+		},
+		{
+			MethodName: "CompleteUploadURL",
+			Handler:    _CoordinatorService_CompleteUploadURL_Handler,
+		},
+		{
+			MethodName: "StartIngestion",
+			Handler:    _CoordinatorService_StartIngestion_Handler,
+		},
+		{
+			MethodName: "GetIngestionStatus",
+			Handler:    _CoordinatorService_GetIngestionStatus_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "api/proto/v1/coordinator.proto",
+}
+
+// RegisterCoordinatorServiceServer registers a CoordinatorServiceServer implementation with the grpc.ServiceRegistrar.
+func RegisterCoordinatorServiceServer(s grpc.ServiceRegistrar, srv CoordinatorServiceServer) {
+	s.RegisterService(&CoordinatorService_ServiceDesc, srv)
+}
+
+func _CoordinatorService_CreateUploadURL_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+	in := new(CreateUploadURLRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoordinatorServiceServer).CreateUploadURL(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/rag.coordinator.v1.CoordinatorService/CreateUploadURL",
+	}
+	handler := func(ctx context.Context, req any) (any, error) {
+		return srv.(CoordinatorServiceServer).CreateUploadURL(ctx, req.(*CreateUploadURLRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CoordinatorService_CompleteUploadURL_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+	in := new(CompleteMultipartUploadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoordinatorServiceServer).CompleteUploadURL(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/rag.coordinator.v1.CoordinatorService/CompleteUploadURL",
+	}
+	handler := func(ctx context.Context, req any) (any, error) {
+		return srv.(CoordinatorServiceServer).CompleteUploadURL(ctx, req.(*CompleteMultipartUploadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CoordinatorService_StartIngestion_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+	in := new(StartIngestionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoordinatorServiceServer).StartIngestion(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/rag.coordinator.v1.CoordinatorService/StartIngestion",
+	}
+	handler := func(ctx context.Context, req any) (any, error) {
+		return srv.(CoordinatorServiceServer).StartIngestion(ctx, req.(*StartIngestionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CoordinatorService_GetIngestionStatus_Handler(srv any, ctx context.Context, dec func(any) error, interceptor grpc.UnaryServerInterceptor) (any, error) {
+	in := new(GetIngestionStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoordinatorServiceServer).GetIngestionStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/rag.coordinator.v1.CoordinatorService/GetIngestionStatus",
+	}
+	handler := func(ctx context.Context, req any) (any, error) {
+		return srv.(CoordinatorServiceServer).GetIngestionStatus(ctx, req.(*GetIngestionStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
 
 // MultimodalModality enumerates supported ingestion payload modalities.
 type MultimodalModality int32
