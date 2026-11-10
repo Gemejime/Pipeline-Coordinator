@@ -150,11 +150,18 @@ Starts an `IngestionCoordinatorWorkflow` instance on Temporal.
   "started_at_unix": 1794039600
 }
 ```
+- **Response `400 Bad Request`**: Validation error (e.g. invalid document ID, missing S3 bucket, invalid hash, zero bytes, unsupported MIME type).
+- **Response `401 Unauthorized`**: Missing or invalid Bearer token.
+- **Response `403 Forbidden`**: Authenticated tenant claim does not match `tenant_id` in payload or missing `ingest:write` scope.
+- **Response `413 Payload Too Large`**: Request body exceeds 64 KiB control-plane limit.
+- **Response `429 Too Many Requests`**: Tenant token bucket exhausted (includes `Retry-After` header).
 
 ---
 
 #### 4. `GET /v1/ingest/workflows/{id}/status`
 Retrieves in-flight state from Temporal or terminal record from PostgreSQL.
+- **Path Parameters**:
+  - `id` (required): The Temporal Workflow ID
 - **Query Parameters**:
   - `tenant_id` (required): Tenant identifier filter; validated strictly against the authenticated Bearer token claims to prevent cross-tenant access.
 
@@ -174,6 +181,11 @@ Retrieves in-flight state from Temporal or terminal record from PostgreSQL.
   "completed_at": "2026-11-07T08:20:45Z"
 }
 ```
+- **Response `400 Bad Request`**: Missing `tenant_id` query parameter or missing `id` path parameter.
+- **Response `401 Unauthorized`**: Missing or invalid Bearer token.
+- **Response `403 Forbidden`**: Token tenant claim does not match query `tenant_id` or missing `ingest:read` scope.
+- **Response `404 Not Found`**: Workflow not found in Temporal or PostgreSQL catalog.
+- **Response `429 Too Many Requests`**: Rate limit exceeded (includes `Retry-After` header).
 
 ---
 
