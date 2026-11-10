@@ -92,3 +92,4 @@ class ExtractSegmentResponse(BaseModel):
     extracted_pages: int = Field(default=0)
     extracted_segments: int = Field(default=0)
     parquet_bytes: int = Field(default=0)
+

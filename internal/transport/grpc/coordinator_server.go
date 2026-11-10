@@ -196,3 +196,4 @@ func mapServiceErrorToGRPC(err error) error {
 		return status.Error(codes.Internal, "internal server error")
 	}
 }
+
