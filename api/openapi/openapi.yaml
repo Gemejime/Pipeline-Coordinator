@@ -304,7 +304,30 @@ paths:
                         type: string
                         example: connected
         '503':
-          description: Service dependencies unavailable
+          description: Service dependencies unavailable or shutting down (drain mode active)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: draining
+                  checks:
+                    type: object
+                    properties:
+                      temporal:
+                        type: string
+                        example: disconnected
+                      postgres:
+                        type: string
+                        example: connected
+                      redis:
+                        type: string
+                        example: connected
+                      drain:
+                        type: string
+                        example: shutting_down
 
   /openapi.yaml:
     get:

@@ -189,9 +189,9 @@ Retrieves in-flight state from Temporal or terminal record from PostgreSQL.
 
 ---
 
-#### 5. `GET /healthz` & `GET /ready`
+#### 5. `GET /healthz`, `GET /ready` & `GET /metrics`
 - **`GET /healthz`**: Returns `200 OK` with `{"status": "healthy"}`.
-- **`GET /ready`**: Returns `200 OK` when PostgreSQL, Redis, and Temporal clients are connected:
+- **`GET /ready`**: Returns `200 OK` when PostgreSQL, Redis, and Temporal clients are connected, and `503 Service Unavailable` when any dependency fails or the coordinator enters shutdown drain mode (`DrainState`):
 ```json
 {
   "status": "ready",
@@ -202,6 +202,19 @@ Retrieves in-flight state from Temporal or terminal record from PostgreSQL.
   }
 }
 ```
+When draining during graceful shutdown (`SIGINT`/`SIGTERM`) or when a dependency check fails:
+```json
+{
+  "status": "draining",
+  "checks": {
+    "drain": "shutting_down",
+    "temporal": "connected",
+    "postgres": "connected",
+    "redis": "connected"
+  }
+}
+```
+- **`GET /metrics`**: Exposes isolated Prometheus registry metrics (`coordinator_workflow_starts_total`, `coordinator_child_workflows_spawned`, `coordinator_redis_events_published_total`, `coordinator_redis_events_errors_total`, `temporal_activity_schedule_to_start_seconds`) in OpenMetrics/Prometheus text format.
 
 ---
 
@@ -520,8 +533,8 @@ CREATE TABLE IF NOT EXISTS pipeline_configs (
     id VARCHAR(64) PRIMARY KEY,
     tenant_id VARCHAR(64) NOT NULL,
     name VARCHAR(255) NOT NULL,
-    chunk_size_tokens INT NOT NULL DEFAULT 300,
-    chunk_overlap_tokens INT NOT NULL DEFAULT 50,
+    chunk_size_tokens INT NOT NULL DEFAULT 300 CHECK (chunk_size_tokens > 0),
+    chunk_overlap_tokens INT NOT NULL DEFAULT 50 CHECK (chunk_overlap_tokens >= 0),
     ocr_enabled BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -535,7 +548,7 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     tenant_id VARCHAR(64) NOT NULL,
     document_id VARCHAR(255) NOT NULL,
     content_hash VARCHAR(64) NOT NULL,
-    status VARCHAR(32) NOT NULL, -- 'COMPLETED', 'FAILED', 'TERMINATED'
+    status VARCHAR(32) NOT NULL CHECK (status IN ('COMPLETED', 'FAILED', 'TERMINATED')),
     total_pages INT NOT NULL DEFAULT 0,
     total_slices INT NOT NULL DEFAULT 0,
     completed_slices INT NOT NULL DEFAULT 0,
@@ -545,6 +558,9 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_configs_tenant
+ON pipeline_configs (tenant_id);
 
 CREATE INDEX IF NOT EXISTS idx_pipeline_runs_tenant_created 
 ON pipeline_runs (tenant_id, created_at DESC);
