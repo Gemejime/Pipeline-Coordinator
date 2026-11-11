@@ -2,14 +2,23 @@ package activity
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
+	"go.temporal.io/sdk/worker"
 
 	coordinatorv1 "rag-ingestion-coordinator/api/proto/v1"
 )
+
+// PublishMilestoneActivityName is the canonical Temporal activity registration name
+// for Redis Pub/Sub milestone emission on coordinator-task-queue.
+const PublishMilestoneActivityName = "PublishMilestoneActivity"
+
+// ErrNilMilestonePublisher indicates that NotificationActivities was registered or invoked without a MilestonePublisher.
+var ErrNilMilestonePublisher = errors.New("milestone publisher is not configured")
 
 // MilestonePublisher abstracts Redis Pub/Sub milestone event broadcasting.
 type MilestonePublisher interface {
@@ -24,6 +33,23 @@ type NotificationActivities struct {
 // NewNotificationActivities creates a NotificationActivities instance.
 func NewNotificationActivities(publisher MilestonePublisher) *NotificationActivities {
 	return &NotificationActivities{Publisher: publisher}
+}
+
+// Register binds the dependency-backed PublishMilestone activity method under
+// PublishMilestoneActivityName on the provided Temporal ActivityRegistry.
+// It returns ErrNilMilestonePublisher if the receiver or its Publisher is nil.
+func (a *NotificationActivities) Register(reg worker.ActivityRegistry) error {
+	if a == nil || a.Publisher == nil {
+		return ErrNilMilestonePublisher
+	}
+	if reg == nil {
+		return errors.New("activity registry is nil")
+	}
+	reg.RegisterActivityWithOptions(
+		a.PublishMilestone,
+		activity.RegisterOptions{Name: PublishMilestoneActivityName},
+	)
+	return nil
 }
 
 // RedisIngestionChannel returns the tenant-scoped Redis Pub/Sub channel name:

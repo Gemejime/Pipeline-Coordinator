@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"rag-ingestion-coordinator/internal/transport/http/middleware"
 )
@@ -22,6 +23,8 @@ type RouterConfig struct {
 	RateLimiter      *middleware.TokenBucketLimiter
 	Logger           *slog.Logger
 	ReadinessCheck   ReadinessCheckFunc
+	DrainState       *atomic.Bool
+	MetricsHandler   http.Handler
 	OpenAPIPath      string
 	OpenAPISpec      []byte
 }
@@ -91,8 +94,12 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	}
 
 	mux.HandleFunc("GET /healthz", handleLivenessProbe)
-	mux.HandleFunc("GET /ready", makeReadinessHandler(cfg.ReadinessCheck))
-	mux.HandleFunc("GET /metrics", handlePrometheusMetrics)
+	mux.HandleFunc("GET /ready", makeReadinessHandler(cfg.ReadinessCheck, cfg.DrainState))
+	if cfg.MetricsHandler != nil {
+		mux.Handle("GET /metrics", cfg.MetricsHandler)
+	} else {
+		mux.HandleFunc("GET /metrics", handlePrometheusMetrics)
+	}
 	mux.HandleFunc("GET /openapi.yaml", makeOpenAPIHandler(cfg.OpenAPISpec, cfg.OpenAPIPath))
 	mux.HandleFunc("GET /docs", handleSwaggerDocs)
 
@@ -105,8 +112,18 @@ func handleLivenessProbe(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-func makeReadinessHandler(checkFn ReadinessCheckFunc) http.HandlerFunc {
+func makeReadinessHandler(checkFn ReadinessCheckFunc, drainState *atomic.Bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if drainState != nil && drainState.Load() {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+				"status": "unavailable",
+				"checks": map[string]string{
+					"drain": "draining",
+				},
+			})
+			return
+		}
+
 		checks := map[string]string{
 			"temporal": "connected",
 			"postgres": "connected",
@@ -115,7 +132,7 @@ func makeReadinessHandler(checkFn ReadinessCheckFunc) http.HandlerFunc {
 		if checkFn != nil {
 			checks = checkFn(r.Context())
 		}
-		allReady := true
+		allReady := len(checks) > 0
 		for _, state := range checks {
 			if state != "connected" {
 				allReady = false

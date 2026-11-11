@@ -327,6 +327,7 @@ func IngestionCoordinatorWorkflow(ctx workflow.Context, req IngestionRequest) (*
 	resolvedPipelineConfig := ResolvePipelineConfig(req.TenantID, req.PipelineConfigID, req.PipelineConfig)
 
 	publishMilestone(StageExtractSegments, "PROGRESS")
+	workflow.GetMetricsHandler(ctx).Gauge("coordinator_child_workflows_spawned").Update(float64(len(currentBatch)))
 
 	type childTask struct {
 		slice  PartitionSlice

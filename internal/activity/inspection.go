@@ -18,12 +18,16 @@ import (
 
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
+	"go.temporal.io/sdk/worker"
 
 	coordinatorv1 "rag-ingestion-coordinator/api/proto/v1"
 	"rag-ingestion-coordinator/internal/service"
 )
 
 const (
+	// InspectDocumentHeaderActivityName is the canonical Temporal activity registration name
+	// for byte-range header inspection on inspection-queue.
+	InspectDocumentHeaderActivityName = "InspectDocumentHeaderActivity"
 	// ErrCodeInvalidArgument marks non-retryable input validation errors.
 	ErrCodeInvalidArgument = "INVALID_ARGUMENT"
 	// ErrCodeCorruptInput marks non-retryable corrupt payload or range errors.
@@ -266,6 +270,9 @@ func (i *ByteRangeHeaderInspector) InspectHeader(
 	return resp, nil
 }
 
+// ErrNilHeaderInspector indicates that InspectionActivities was registered without a configured HeaderInspector.
+var ErrNilHeaderInspector = errors.New("header inspector is not configured")
+
 // InspectionActivities holds dependencies for document header inspection activities.
 type InspectionActivities struct {
 	Inspector HeaderInspector
@@ -281,6 +288,23 @@ func NewInspectionActivitiesWithRangeReader(reader ByteRangeReader) *InspectionA
 	return &InspectionActivities{
 		Inspector: NewByteRangeHeaderInspector(reader),
 	}
+}
+
+// Register binds the dependency-backed InspectDocumentHeader activity method under
+// InspectDocumentHeaderActivityName on the provided Temporal ActivityRegistry.
+// It returns ErrNilHeaderInspector if the receiver or its Inspector is nil.
+func (a *InspectionActivities) Register(reg worker.ActivityRegistry) error {
+	if a == nil || a.Inspector == nil {
+		return ErrNilHeaderInspector
+	}
+	if reg == nil {
+		return errors.New("activity registry is nil")
+	}
+	reg.RegisterActivityWithOptions(
+		a.InspectDocumentHeader,
+		activity.RegisterOptions{Name: InspectDocumentHeaderActivityName},
+	)
+	return nil
 }
 
 // InspectDocumentHeaderActivity executes on inspection-queue (10s heartbeat timeout)

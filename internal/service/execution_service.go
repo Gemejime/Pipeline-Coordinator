@@ -15,6 +15,7 @@ import (
 	"go.temporal.io/sdk/temporal"
 
 	coordinatorv1 "rag-ingestion-coordinator/api/proto/v1"
+	"rag-ingestion-coordinator/internal/telemetry"
 )
 
 const (
@@ -40,20 +41,24 @@ var (
 	ErrInvalidExecutionRequest = errors.New("INVALID_ARGUMENT: execution request validation failed")
 	// ErrWorkflowNotFound indicates that the requested workflow execution does not exist.
 	ErrWorkflowNotFound = errors.New("NOT_FOUND: workflow execution not found")
+	// ErrPipelineConfigNotFound indicates that the requested pipeline configuration does not exist.
+	ErrPipelineConfigNotFound = errors.New("NOT_FOUND: pipeline configuration not found")
 )
 
 // WorkflowIngestionRequest carries parameters passed into IngestionCoordinatorWorkflow.
 type WorkflowIngestionRequest struct {
-	TenantID         string `json:"tenant_id"`
-	DocumentID       string `json:"document_id"`
-	PipelineRunID    string `json:"pipeline_run_id,omitempty"`
-	S3Bucket         string `json:"s3_bucket"`
-	S3Key            string `json:"s3_key"`
-	ContentHash      string `json:"content_hash"`
-	TotalBytes       int64  `json:"total_bytes"`
-	MimeType         string `json:"mime_type"`
-	PipelineConfigID string `json:"pipeline_config_id,omitempty"`
-	StartedAtUnix    int64  `json:"started_at_unix,omitempty"`
+	TenantID              string                        `json:"tenant_id"`
+	DocumentID            string                        `json:"document_id"`
+	PipelineRunID         string                        `json:"pipeline_run_id,omitempty"`
+	S3Bucket              string                        `json:"s3_bucket"`
+	S3Key                 string                        `json:"s3_key"`
+	ContentHash           string                        `json:"content_hash"`
+	TotalBytes            int64                         `json:"total_bytes"`
+	MimeType              string                        `json:"mime_type"`
+	PipelineConfigID      string                        `json:"pipeline_config_id,omitempty"`
+	PipelineConfig        *coordinatorv1.PipelineConfig `json:"pipeline_config,omitempty"`
+	UseHashPrefixS3Layout bool                          `json:"use_hash_prefix_s3_layout,omitempty"`
+	StartedAtUnix         int64                         `json:"started_at_unix,omitempty"`
 }
 
 // WorkflowIngestionStatus matches the live status payload returned by QueryTypeIngestionStatus.
@@ -84,6 +89,11 @@ type TerminalRunReader interface {
 	GetTerminalRun(ctx context.Context, tenantID, workflowID string) (*coordinatorv1.GetIngestionStatusResponse, error)
 }
 
+// PipelineConfigReader abstracts optional retrieval of tenant-scoped pipeline configurations from PostgreSQL.
+type PipelineConfigReader interface {
+	GetPipelineConfig(ctx context.Context, tenantID, configID string) (*coordinatorv1.PipelineConfig, error)
+}
+
 // ExecutionCoordinator defines the workflow execution orchestration interface.
 type ExecutionCoordinator interface {
 	StartIngestion(ctx context.Context, req coordinatorv1.StartIngestionRequest) (*coordinatorv1.StartIngestionResponse, error)
@@ -92,15 +102,21 @@ type ExecutionCoordinator interface {
 
 // ExecutionServiceConfig configures dependencies and behavior of ExecutionService.
 type ExecutionServiceConfig struct {
-	TerminalReader TerminalRunReader
-	NowFunc        func() time.Time
+	TerminalReader        TerminalRunReader
+	PipelineConfigReader  PipelineConfigReader
+	UseHashPrefixS3Layout bool
+	Metrics               *telemetry.Metrics
+	NowFunc               func() time.Time
 }
 
 // ExecutionService coordinates workflow initiation, deduplication, and query-based status inspection.
 type ExecutionService struct {
-	client         TemporalWorkflowClient
-	terminalReader TerminalRunReader
-	nowFunc        func() time.Time
+	client                TemporalWorkflowClient
+	terminalReader        TerminalRunReader
+	pipelineConfigReader  PipelineConfigReader
+	useHashPrefixS3Layout bool
+	metrics               *telemetry.Metrics
+	nowFunc               func() time.Time
 }
 
 // NewExecutionService constructs an ExecutionService.
@@ -110,9 +126,12 @@ func NewExecutionService(client TemporalWorkflowClient, cfg ExecutionServiceConf
 		nowFunc = func() time.Time { return time.Now().UTC() }
 	}
 	return &ExecutionService{
-		client:         client,
-		terminalReader: cfg.TerminalReader,
-		nowFunc:        nowFunc,
+		client:                client,
+		terminalReader:        cfg.TerminalReader,
+		pipelineConfigReader:  cfg.PipelineConfigReader,
+		useHashPrefixS3Layout: cfg.UseHashPrefixS3Layout,
+		metrics:               cfg.Metrics,
+		nowFunc:               nowFunc,
 	}
 }
 
@@ -166,18 +185,36 @@ func (s *ExecutionService) StartIngestion(
 
 	workflowID := BuildIngestionWorkflowID(tenantID, contentHash)
 	pipelineRunID := fmt.Sprintf("run-%s-%d", contentHash[:16], s.nowFunc().UnixNano())
+	configID := strings.TrimSpace(req.PipelineConfigID)
+
+	var resolvedPipelineCfg *coordinatorv1.PipelineConfig
+	if s.pipelineConfigReader != nil && configID != "" {
+		cfg, cfgErr := s.pipelineConfigReader.GetPipelineConfig(ctx, tenantID, configID)
+		if cfgErr == nil && cfg != nil {
+			resolvedPipelineCfg = cfg
+		} else if errors.Is(cfgErr, ErrTenantMismatch) {
+			return nil, cfgErr
+		} else if configID != "default-multimodal-v1" {
+			if errors.Is(cfgErr, ErrPipelineConfigNotFound) {
+				return nil, fmt.Errorf("%w: pipeline_config_id %q not found", ErrInvalidExecutionRequest, configID)
+			}
+			return nil, fmt.Errorf("failed to resolve pipeline configuration %q: %w", configID, cfgErr)
+		}
+	}
 
 	ingestReq := WorkflowIngestionRequest{
-		TenantID:         tenantID,
-		DocumentID:       documentID,
-		PipelineRunID:    pipelineRunID,
-		S3Bucket:         s3Bucket,
-		S3Key:            strings.TrimSpace(req.S3Key),
-		ContentHash:      contentHash,
-		TotalBytes:       req.TotalBytes,
-		MimeType:         normalizedMime,
-		PipelineConfigID: strings.TrimSpace(req.PipelineConfigID),
-		StartedAtUnix:    s.nowFunc().Unix(),
+		TenantID:              tenantID,
+		DocumentID:            documentID,
+		PipelineRunID:         pipelineRunID,
+		S3Bucket:              s3Bucket,
+		S3Key:                 strings.TrimSpace(req.S3Key),
+		ContentHash:           contentHash,
+		TotalBytes:            req.TotalBytes,
+		MimeType:              normalizedMime,
+		PipelineConfigID:      configID,
+		PipelineConfig:        resolvedPipelineCfg,
+		UseHashPrefixS3Layout: s.useHashPrefixS3Layout,
+		StartedAtUnix:         s.nowFunc().Unix(),
 	}
 
 	workflowOptions := client.StartWorkflowOptions{
@@ -197,6 +234,7 @@ func (s *ExecutionService) StartIngestion(
 	if err != nil {
 		var alreadyStarted *serviceerror.WorkflowExecutionAlreadyStarted
 		if errors.As(err, &alreadyStarted) {
+			s.metrics.IncWorkflowStart(tenantID, "DEDUPLICATED")
 			return &coordinatorv1.StartIngestionResponse{
 				WorkflowID:    workflowID,
 				RunID:         alreadyStarted.RunId,
@@ -204,6 +242,7 @@ func (s *ExecutionService) StartIngestion(
 				StartedAtUnix: ingestReq.StartedAtUnix,
 			}, nil
 		}
+		s.metrics.IncWorkflowStart(tenantID, "FAILED")
 		return nil, fmt.Errorf("failed to schedule ingestion workflow: %w", err)
 	}
 
@@ -211,6 +250,7 @@ func (s *ExecutionService) StartIngestion(
 	if runID == "" {
 		runID = pipelineRunID
 	}
+	s.metrics.IncWorkflowStart(tenantID, "RUNNING")
 
 	return &coordinatorv1.StartIngestionResponse{
 		WorkflowID:    workflowID,
@@ -255,7 +295,7 @@ func (s *ExecutionService) GetWorkflowStatus(
 			if status.TenantID != "" && status.TenantID != validTenant {
 				return nil, fmt.Errorf("%w: workflow tenant %q does not match %q", ErrTenantMismatch, status.TenantID, validTenant)
 			}
-			return &coordinatorv1.GetIngestionStatusResponse{
+			liveResp := &coordinatorv1.GetIngestionStatusResponse{
 				WorkflowID:      cleanWorkflowID,
 				TenantID:        validTenant,
 				Status:          status.Status,
@@ -264,7 +304,11 @@ func (s *ExecutionService) GetWorkflowStatus(
 				FailedSlices:    status.FailedSlices,
 				TotalPages:      status.TotalPages,
 				CreatedAt:       s.nowFunc().Format(time.RFC3339),
-			}, nil
+			}
+			if !isTerminalExecutionStatus(status.Status) {
+				return liveResp, nil
+			}
+			return s.enrichTerminalStatus(ctx, validTenant, cleanWorkflowID, liveResp)
 		}
 	}
 
@@ -381,6 +425,76 @@ func validateDocumentIdentifier(documentID string) (string, error) {
 		return "", fmt.Errorf("%w: document_id exceeds 255 characters", ErrInvalidExecutionRequest)
 	}
 	return trimmed, nil
+}
+
+func (s *ExecutionService) enrichTerminalStatus(
+	ctx context.Context,
+	validTenant, cleanWorkflowID string,
+	liveResp *coordinatorv1.GetIngestionStatusResponse,
+) (*coordinatorv1.GetIngestionStatusResponse, error) {
+	if s.terminalReader != nil {
+		termResp, termErr := s.terminalReader.GetTerminalRun(ctx, validTenant, cleanWorkflowID)
+		if errors.Is(termErr, ErrTenantMismatch) {
+			return nil, termErr
+		}
+		if termErr == nil && termResp != nil {
+			if termResp.TenantID != "" && termResp.TenantID != validTenant {
+				return nil, fmt.Errorf("%w: catalog tenant %q does not match %q", ErrTenantMismatch, termResp.TenantID, validTenant)
+			}
+			if termResp.TotalSlices == 0 && liveResp.TotalSlices > 0 {
+				termResp.TotalSlices = liveResp.TotalSlices
+				termResp.CompletedSlices = liveResp.CompletedSlices
+				termResp.FailedSlices = liveResp.FailedSlices
+				termResp.TotalPages = liveResp.TotalPages
+			}
+			return termResp, nil
+		}
+	}
+
+	desc, descErr := s.client.DescribeWorkflowExecution(ctx, cleanWorkflowID, "")
+	if descErr != nil || desc == nil || desc.WorkflowExecutionInfo == nil {
+		return liveResp, nil
+	}
+
+	info := desc.WorkflowExecutionInfo
+	if info.SearchAttributes != nil && info.SearchAttributes.IndexedFields != nil {
+		if payload, ok := info.SearchAttributes.IndexedFields[SearchAttrTenantID.GetName()]; ok {
+			var searchTenant string
+			if err := converter.GetDefaultDataConverter().FromPayload(payload, &searchTenant); err == nil {
+				if searchTenant != "" && searchTenant != validTenant {
+					return nil, fmt.Errorf("%w: search attribute tenant %q does not match %q", ErrTenantMismatch, searchTenant, validTenant)
+				}
+			}
+		}
+	}
+
+	if info.Execution != nil && info.Execution.GetRunId() != "" {
+		liveResp.RunID = info.Execution.GetRunId()
+	}
+	if info.StartTime != nil {
+		start := info.StartTime.AsTime()
+		liveResp.CreatedAt = start.UTC().Format(time.RFC3339)
+		if info.CloseTime != nil {
+			closeT := info.CloseTime.AsTime()
+			liveResp.CompletedAt = closeT.UTC().Format(time.RFC3339)
+			dur := closeT.Sub(start).Seconds()
+			if dur < 0 {
+				dur = 0
+			}
+			liveResp.DurationSeconds = dur
+		}
+	}
+
+	return liveResp, nil
+}
+
+func isTerminalExecutionStatus(status string) bool {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "COMPLETED", "FAILED", "TERMINATED", "CANCELED", "TIMED_OUT":
+		return true
+	default:
+		return false
+	}
 }
 
 func mapWorkflowExecutionStatus(status enumspb.WorkflowExecutionStatus) string {
