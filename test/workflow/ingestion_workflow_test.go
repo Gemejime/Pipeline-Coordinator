@@ -577,3 +577,58 @@ func (s *inMemoryCatalogStore) RecordTerminalRun(
 	}
 	return fmt.Sprintf("rec_%s", req.WorkflowID), nil
 }
+
+type noopByteRangeReader struct{}
+
+func (noopByteRangeReader) ReadRange(_ context.Context, _, _ string, _, _ int64) ([]byte, error) {
+	return nil, nil
+}
+
+// TestPhase4_ActivityRegistrations verifies fail-fast dependency checks and registered activity aliases
+// for NotificationActivities and InspectionActivities.
+func TestPhase4_ActivityRegistrations(t *testing.T) {
+	t.Parallel()
+
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+
+	nilNotify := &activity.NotificationActivities{}
+	assert.ErrorIs(t, nilNotify.Register(env), activity.ErrNilMilestonePublisher)
+
+	nilInspect := &activity.InspectionActivities{}
+	assert.ErrorIs(t, nilInspect.Register(env), activity.ErrNilHeaderInspector)
+
+	pub := &inMemoryMilestonePublisher{}
+	notifyActs := activity.NewNotificationActivities(pub)
+	require.NoError(t, notifyActs.Register(env))
+
+	inspector := activity.NewByteRangeHeaderInspector(noopByteRangeReader{})
+	inspectActs := activity.NewInspectionActivities(inspector)
+	require.NoError(t, inspectActs.Register(env))
+
+	// Execute registered PublishMilestoneActivity through TestActivityEnvironment to confirm alias binding.
+	actEnv := suite.NewTestActivityEnvironment()
+	var captured []coordinatorv1.ProgressMilestoneEvent
+	actPub := &inMemoryMilestonePublisher{
+		onPublish: func(ev coordinatorv1.ProgressMilestoneEvent) {
+			captured = append(captured, ev)
+		},
+	}
+	require.NoError(t, activity.NewNotificationActivities(actPub).Register(actEnv))
+
+	ev := coordinatorv1.ProgressMilestoneEvent{
+		EventID:        "evt_reg_test",
+		SequenceNumber: 1,
+		TenantID:       "tenant-corp-01",
+		DocumentID:     "doc-reg-01",
+		WorkflowID:     "ingest-tenant-corp-01-hash",
+		Stage:          "EXTRACT_SEGMENTS",
+		Status:         "PROGRESS",
+		ProgressPct:    50.0,
+		TimestampUnix:  1794039630,
+	}
+	_, err := actEnv.ExecuteActivity(activity.PublishMilestoneActivityName, coordinatorv1.PublishMilestoneRequest{Event: ev})
+	require.NoError(t, err)
+	require.Len(t, captured, 1)
+	assert.Equal(t, "evt_reg_test", captured[0].EventID)
+}

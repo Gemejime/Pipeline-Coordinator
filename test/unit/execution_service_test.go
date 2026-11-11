@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	commonpb "go.temporal.io/api/common/v1"
@@ -19,6 +20,7 @@ import (
 
 	coordinatorv1 "rag-ingestion-coordinator/api/proto/v1"
 	"rag-ingestion-coordinator/internal/service"
+	"rag-ingestion-coordinator/internal/telemetry"
 )
 
 type mockTemporalClient struct {
@@ -400,5 +402,152 @@ func TestExecutionService_GetWorkflowStatus(t *testing.T) {
 		_, err := svc.GetWorkflowStatus(context.Background(), workflowID, tenantID)
 		require.Error(t, err)
 		assert.ErrorIs(t, err, service.ErrWorkflowNotFound)
+	})
+
+	t.Run("closed workflow query enriches run metadata from catalog and describe", func(t *testing.T) {
+		t.Parallel()
+		fixedNow := time.Date(2026, 11, 10, 12, 5, 0, 0, time.UTC)
+		mockClient := &mockTemporalClient{
+			queryWorkflowFn: func(ctx context.Context, wfID, runID, qType string, args ...any) (converter.EncodedValue, error) {
+				return mockEncodedValue{
+					val: service.WorkflowIngestionStatus{
+						WorkflowID:      workflowID,
+						TenantID:        tenantID,
+						DocumentID:      "doc-001",
+						Status:          "COMPLETED",
+						Stage:           "CATALOG_RUN",
+						TotalPages:      10,
+						TotalSlices:     2,
+						CompletedSlices: 2,
+					},
+				}, nil
+			},
+		}
+		reader := &mockTerminalReader{
+			getTerminalRunFn: func(ctx context.Context, tID, wfID string) (*coordinatorv1.GetIngestionStatusResponse, error) {
+				return &coordinatorv1.GetIngestionStatusResponse{
+					WorkflowID:      wfID,
+					RunID:           "run-pg-999",
+					TenantID:        tID,
+					Status:          "COMPLETED",
+					DurationSeconds: 42.5,
+					CreatedAt:       fixedNow.Add(-43 * time.Second).Format(time.RFC3339),
+					CompletedAt:     fixedNow.Format(time.RFC3339),
+				}, nil
+			},
+		}
+
+		svc := service.NewExecutionService(mockClient, service.ExecutionServiceConfig{
+			TerminalReader: reader,
+			NowFunc:        func() time.Time { return fixedNow },
+		})
+
+		resp, err := svc.GetWorkflowStatus(context.Background(), workflowID, tenantID)
+		require.NoError(t, err)
+		assert.Equal(t, "run-pg-999", resp.RunID)
+		assert.Equal(t, 42.5, resp.DurationSeconds)
+		assert.Equal(t, fixedNow.Format(time.RFC3339), resp.CompletedAt)
+		assert.Equal(t, int32(2), resp.CompletedSlices)
+	})
+}
+
+type mockPipelineConfigReader struct {
+	getFn func(ctx context.Context, tenantID, configID string) (*coordinatorv1.PipelineConfig, error)
+}
+
+func (m *mockPipelineConfigReader) GetPipelineConfig(ctx context.Context, tenantID, configID string) (*coordinatorv1.PipelineConfig, error) {
+	if m.getFn != nil {
+		return m.getFn(ctx, tenantID, configID)
+	}
+	return nil, service.ErrPipelineConfigNotFound
+}
+
+func TestExecutionService_PipelineConfigMetricsAndHashPrefix(t *testing.T) {
+	t.Parallel()
+
+	fixedNow := time.Date(2026, 11, 10, 14, 0, 0, 0, time.UTC)
+
+	t.Run("resolves PipelineConfig, propagates UseHashPrefixS3Layout, and records started metric", func(t *testing.T) {
+		t.Parallel()
+
+		metrics := telemetry.NewMetrics()
+		var capturedReq service.WorkflowIngestionRequest
+		mockClient := &mockTemporalClient{
+			executeWorkflowFn: func(ctx context.Context, opts client.StartWorkflowOptions, wf any, args ...any) (client.WorkflowRun, error) {
+				require.Len(t, args, 1)
+				var ok bool
+				capturedReq, ok = args[0].(service.WorkflowIngestionRequest)
+				require.True(t, ok)
+				return &mockWorkflowRun{id: opts.ID, runID: "run-cfg-1"}, nil
+			},
+		}
+		cfgReader := &mockPipelineConfigReader{
+			getFn: func(ctx context.Context, tenantID, configID string) (*coordinatorv1.PipelineConfig, error) {
+				assert.Equal(t, "tenant-corp-01", tenantID)
+				assert.Equal(t, "cfg-custom-512", configID)
+				return &coordinatorv1.PipelineConfig{
+					ID:                 configID,
+					TenantID:           tenantID,
+					Name:               "Custom 512",
+					ChunkSizeTokens:    512,
+					ChunkOverlapTokens: 64,
+					OCREnabled:         false,
+				}, nil
+			},
+		}
+
+		svc := service.NewExecutionService(mockClient, service.ExecutionServiceConfig{
+			PipelineConfigReader:  cfgReader,
+			UseHashPrefixS3Layout: true,
+			Metrics:               metrics,
+			NowFunc:               func() time.Time { return fixedNow },
+		})
+
+		req := validStartRequest()
+		req.PipelineConfigID = "cfg-custom-512"
+		resp, err := svc.StartIngestion(context.Background(), req)
+		require.NoError(t, err)
+		assert.Equal(t, "run-cfg-1", resp.RunID)
+
+		require.NotNil(t, capturedReq.PipelineConfig)
+		assert.Equal(t, int32(512), capturedReq.PipelineConfig.ChunkSizeTokens)
+		assert.Equal(t, int32(64), capturedReq.PipelineConfig.ChunkOverlapTokens)
+		assert.False(t, capturedReq.PipelineConfig.OCREnabled)
+		assert.True(t, capturedReq.UseHashPrefixS3Layout)
+
+		assert.Equal(t, float64(1), testutil.ToFloat64(metrics.WorkflowStartsTotal.WithLabelValues("tenant-corp-01", "RUNNING")))
+	})
+
+	t.Run("missing non-default pipeline config fails closed and workflow error increments FAILED metric", func(t *testing.T) {
+		t.Parallel()
+
+		metrics := telemetry.NewMetrics()
+		mockClient := &mockTemporalClient{
+			executeWorkflowFn: func(ctx context.Context, opts client.StartWorkflowOptions, wf any, args ...any) (client.WorkflowRun, error) {
+				return nil, errors.New("temporal unavailable")
+			},
+		}
+		cfgReader := &mockPipelineConfigReader{
+			getFn: func(ctx context.Context, tenantID, configID string) (*coordinatorv1.PipelineConfig, error) {
+				return nil, service.ErrPipelineConfigNotFound
+			},
+		}
+
+		svc := service.NewExecutionService(mockClient, service.ExecutionServiceConfig{
+			PipelineConfigReader: cfgReader,
+			Metrics:              metrics,
+		})
+
+		req := validStartRequest()
+		req.PipelineConfigID = "cfg-does-not-exist"
+		_, err := svc.StartIngestion(context.Background(), req)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, service.ErrInvalidExecutionRequest)
+
+		// Verify FAILED counter increments when ExecuteWorkflow fails for a valid/default config.
+		reqDefault := validStartRequest()
+		_, err = svc.StartIngestion(context.Background(), reqDefault)
+		require.Error(t, err)
+		assert.Equal(t, float64(1), testutil.ToFloat64(metrics.WorkflowStartsTotal.WithLabelValues("tenant-corp-01", "FAILED")))
 	})
 }
