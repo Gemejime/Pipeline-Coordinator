@@ -191,3 +191,44 @@ jobs:
           fi
           echo "Temporal history guardrail test validation complete."
 
+      - name: Run Chaos & Subprocess Resiliency Tests (-race)
+        run: |
+          go test -v -race -run "TestChaos_(WorkerDrop|SubprocessKill|CanaryDrain|RateLimiterBound)" ./test/chaos/...
+
+      - name: Run Load & <256 MiB Memory Ceiling Gate (non-race)
+        run: |
+          go test -v -run "TestChaos_(Load|MemoryCeiling|SustainedPresign)" ./test/chaos/...
+
+  container-and-helm-validation:
+    name: Distroless Docker & Helm Chart Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Build Multi-Stage Distroless Container Image
+        run: |
+          docker build -f deployments/docker/Dockerfile -t rag-ingestion-coordinator:ci .
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+
+      - name: Lint & Render Helm Chart (Standard Deployment & Argo Rollout Canary + Monitoring)
+        run: |
+          helm lint deployments/helm
+          helm template rag-ingestion-coordinator deployments/helm \
+            --set rollout.enabled=false > /tmp/rendered-deployment.yaml
+          helm template rag-ingestion-coordinator deployments/helm \
+            --set rollout.enabled=true \
+            --set monitoring.serviceMonitor.enabled=true \
+            --set monitoring.prometheusRule.enabled=true > /tmp/rendered-rollout.yaml
+          grep -q "kind: Deployment" /tmp/rendered-deployment.yaml
+          grep -q "kind: Rollout" /tmp/rendered-rollout.yaml
+          grep -q "kind: AnalysisTemplate" /tmp/rendered-rollout.yaml
+          grep -q "kind: ServiceMonitor" /tmp/rendered-rollout.yaml
+          grep -q "kind: PrometheusRule" /tmp/rendered-rollout.yaml
+

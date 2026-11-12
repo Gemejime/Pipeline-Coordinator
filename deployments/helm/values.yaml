@@ -1,0 +1,247 @@
+# Production defaults for rag-ingestion-coordinator (Pure Go Control Plane)
+replicaCount: 3
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: ghcr.io/rag-platform/rag-ingestion-coordinator
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+serviceAccount:
+  create: true
+  name: ""
+  # Annotate with AWS IRSA role ARN or GCP Workload Identity for keyless S3/STS access.
+  annotations: {}
+  #   eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/rag-ingestion-coordinator
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8080"
+  prometheus.io/path: "/metrics"
+
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  capabilities:
+    drop:
+      - ALL
+
+# Strict <256 MiB RSS memory ceiling per pod (Zero-Heap Ingestion invariant).
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# Must exceed SHUTDOWN_DRAIN_DELAY (5s) + defaultShutdownTimeout (20s) so zero-drop drain finishes cleanly.
+terminationGracePeriodSeconds: 35
+
+# Bounded ephemeral emptyDir mounted at /tmp; strictly zero /dev/shm mounts.
+tmpVolumeSizeLimit: 64Mi
+
+service:
+  type: ClusterIP
+  httpPort: 8080
+  grpcPort: 50051
+  annotations: {}
+
+# 12-Factor non-secret runtime environment wired into ConfigMap.
+config:
+  logLevel: info
+  httpAddr: ":8080"
+  grpcAddr: ":50051"
+  temporalHostPort: "temporal-frontend.temporal.svc.cluster.local:7233"
+  temporalNamespace: "default"
+  postgresSSLMode: "require"
+  postgresMaxConns: "20"
+  postgresMinConns: "2"
+  autoMigrate: "false"
+  redisAddrs: "redis-master.redis.svc.cluster.local:6379"
+  redisMasterName: ""
+  redisUsername: ""
+  redisDB: "0"
+  redisTLSEnabled: "true"
+  s3Region: "us-east-1"
+  s3Bucket: "rag-ingestion-bucket"
+  s3Endpoint: ""
+  s3UsePathStyle: "false"
+  useHashPrefixS3Layout: "true"
+  enableInspectionWorker: "true"
+  shutdownDrainDelay: "5s"
+  openAPISpecPath: "api/openapi/openapi.yaml"
+
+# Sensitive credentials referenced strictly from a pre-provisioned Kubernetes Secret (never plaintext here).
+# Ensure AUTH_HMAC_SECRET (or AUTH_STATIC_TOKENS_JSON) is present in production so auth does not fail closed.
+secrets:
+  existingSecret: "rag-ingestion-coordinator-secrets"
+  keys:
+    postgresDSN: "POSTGRES_DSN"
+    redisPassword: "REDIS_PASSWORD"
+    authHMACSecret: "AUTH_HMAC_SECRET"
+    authStaticTokensJSON: ""
+    awsAccessKeyID: ""
+    awsSecretAccessKey: ""
+
+probes:
+  startup:
+    path: /healthz
+    initialDelaySeconds: 2
+    periodSeconds: 5
+    timeoutSeconds: 2
+    failureThreshold: 12
+  liveness:
+    path: /healthz
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 3
+  readiness:
+    path: /ready
+    periodSeconds: 5
+    timeoutSeconds: 2
+    failureThreshold: 3
+
+# Disaggregated node placement & Multi-AZ High Availability
+nodeSelector: {}
+tolerations: []
+
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: ScheduleAnyway
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          topologyKey: topology.kubernetes.io/zone
+          labelSelector:
+            matchLabels: {}
+      - weight: 50
+        podAffinityTerm:
+          topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels: {}
+
+# High Availability PodDisruptionBudget (disable in single-replica dev/staging overrides to avoid drain deadlocks).
+pdb:
+  enabled: true
+  minAvailable: 2
+
+# Argo Rollouts Canary Cutover (set rollout.enabled=true to replace Deployment with Argo Rollout + AnalysisTemplate).
+# When trafficRouting is omitted, Argo Rollouts falls back to replica-based canary weight approximation.
+rollout:
+  enabled: false
+  canary:
+    steps:
+      - setWeight: 10
+      - pause:
+          duration: 2m
+      - analysis:
+          templates:
+            - templateName: "{{ include \"rag-ingestion-coordinator.fullname\" . }}-canary-analysis"
+      - setWeight: 50
+      - pause:
+          duration: 5m
+    # Optional service-mesh / ingress traffic router configuration (e.g., nginx, istio, alb).
+    trafficRouting: {}
+  analysis:
+    enabled: true
+    prometheusAddress: "http://prometheus-operated.monitoring.svc.cluster.local:9090"
+    interval: "1m"
+    count: 3
+    failureLimit: 1
+    maxFailureRate: "0.02"
+
+# ArgoCD PreSync / Helm Pre-Upgrade Migration Hook (runs `/coordinator -migrate`)
+migration:
+  enabled: true
+  hookMode: "argocd" # "argocd" (PreSync) or "helm" (pre-install,pre-upgrade)
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 600
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
+
+# Strict Kubernetes NetworkPolicy isolation for both coordinator pods and PreSync migration Job.
+networkPolicy:
+  enabled: true
+  ingress:
+    apiGateway:
+      namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-gateway
+      podSelector: {}
+    prometheus:
+      namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+      podSelector: {}
+  egress:
+    dns:
+      namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    temporal:
+      namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: temporal
+      podSelector: {}
+      cidrs: []
+    postgres:
+      namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: database
+      podSelector: {}
+      cidrs: []
+    redis:
+      namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: redis
+      podSelector: {}
+      cidrs: []
+    awsHTTPS:
+      # Restrict to AWS S3/STS VPC Endpoint CIDRs in production environments.
+      cidrs:
+        - "0.0.0.0/0"
+
+# Prometheus Operator CRDs (enable only when Prometheus Operator CRDs are installed in the cluster).
+monitoring:
+  serviceMonitor:
+    enabled: false
+    namespace: ""
+    interval: 15s
+    scrapeTimeout: 10s
+    labels: {}
+  prometheusRule:
+    enabled: false
+    namespace: ""
+    labels: {}
+

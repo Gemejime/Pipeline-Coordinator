@@ -1,0 +1,15 @@
+apiVersion: v2
+name: rag-ingestion-coordinator
+description: Pure Go control-plane microservice orchestrating multimodal RAG ingestion DAGs via Temporal, S3 presigned URLs, Redis Pub/Sub, and PostgreSQL.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - rag
+  - temporal
+  - ingestion
+  - coordinator
+  - control-plane
+maintainers:
+  - name: RAG Platform Engineering
+
