@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
-# Stage 1: Static Go 1.26.10 Control-Plane Builder
-FROM golang:1.26.10-alpine AS builder
+# Stage 1: Static Go 1.26.11 Control-Plane Builder
+FROM golang:1.26.11-alpine AS builder
 
 WORKDIR /src
 
