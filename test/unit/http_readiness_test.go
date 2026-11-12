@@ -78,7 +78,7 @@ func TestHTTP_ReadinessProbeAndDrain(t *testing.T) {
 		}
 	})
 
-	t.Run("503 unavailable immediately when draining during shutdown", func(t *testing.T) {
+	t.Run("503 draining immediately when draining during shutdown", func(t *testing.T) {
 		t.Parallel()
 		var drain atomic.Bool
 		router := transport.NewRouter(transport.RouterConfig{
@@ -97,7 +97,10 @@ func TestHTTP_ReadinessProbeAndDrain(t *testing.T) {
 		assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 		var body map[string]any
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-		assert.Equal(t, "unavailable", body["status"])
+		assert.Equal(t, "draining", body["status"])
+		checks, ok := body["checks"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "shutting_down", checks["drain"])
 	})
 }
 
@@ -113,6 +116,8 @@ func TestHTTP_LivePrometheusMetricsEndpoint(t *testing.T) {
 		"task_queue": "doc-ai-task-queue",
 	})
 	temporalHandler.Gauge("coordinator_child_workflows_spawned").Update(12)
+	temporalHandler.Counter("coordinator_child_workflows_completed_total").Inc(3)
+	temporalHandler.Counter("coordinator_child_workflows_failed_total").Inc(1)
 	temporalHandler.Timer("temporal_activity_schedule_to_start_latency").Record(250 * time.Millisecond)
 
 	router := transport.NewRouter(transport.RouterConfig{
@@ -127,6 +132,8 @@ func TestHTTP_LivePrometheusMetricsEndpoint(t *testing.T) {
 	body := rec.Body.String()
 	assert.Contains(t, body, `coordinator_workflow_starts_total{status="RUNNING",tenant_id="tenant-corp-01"} 1`)
 	assert.Contains(t, body, `coordinator_child_workflows_spawned_count 1`)
+	assert.Contains(t, body, `coordinator_child_workflows_completed_total 3`)
+	assert.Contains(t, body, `coordinator_child_workflows_failed_total 1`)
 	assert.Contains(t, body, `coordinator_redis_events_published_total 1`)
 	assert.Contains(t, body, `coordinator_redis_events_errors_total 1`)
 	assert.Contains(t, body, `temporal_activity_schedule_to_start_seconds_count{task_queue="doc-ai-task-queue"} 1`)

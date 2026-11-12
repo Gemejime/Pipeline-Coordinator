@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -12,6 +13,7 @@ import (
 	temporalactivity "go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/testsuite"
+	"go.temporal.io/sdk/worker"
 	temporalworkflow "go.temporal.io/sdk/workflow"
 
 	coordinatorv1 "rag-ingestion-coordinator/api/proto/v1"
@@ -354,6 +356,9 @@ func TestIngestionCoordinatorWorkflow_HistoryLimit_20000Pages(t *testing.T) {
 	for gen := 0; gen < expectedGenerations; gen++ {
 		var suite testsuite.WorkflowTestSuite
 		env := suite.NewTestWorkflowEnvironment()
+		env.SetWorkerOptions(worker.Options{
+			DeadlockDetectionTimeout: 10 * time.Second,
+		})
 
 		env.RegisterWorkflow(workflow.DocumentPartitionWorkflow)
 		env.RegisterActivity(activity.InspectDocumentHeaderActivity)

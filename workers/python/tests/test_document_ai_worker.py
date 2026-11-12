@@ -217,6 +217,51 @@ class TestDispatchDocAIExtractActivity(unittest.IsolatedAsyncioTestCase):
         last_hb = heartbeats[-1][0]
         self.assertEqual(last_hb["last_processed_unit"], 5)
 
+    async def test_activity_resume_checkpoint_fallback_across_represign(self):
+        """Verifies activity resumes from req.resume_checkpoint when heartbeat_details are absent."""
+        env = ActivityEnvironment()
+        heartbeats = []
+        env.on_heartbeat = lambda *args: heartbeats.append(args)
+
+        checkpoint = HeartbeatDetails(
+            slice_id="slice-represign-resume-01",
+            slice_index=2,
+            last_processed_unit=4,
+            processed_units=4,
+            total_units=6,
+            intermediate_s3_key="intermediate/tenant/hash/unit_4.tmp",
+            updated_at_unix=1794039650,
+        )
+
+        req = ExtractSegmentRequest(
+            slice=PartitionSlice(
+                slice_id="slice-represign-resume-01",
+                slice_index=2,
+                total_slices=1,
+                tenant_id="tenant-corp-01",
+                document_id="doc-01",
+                content_hash="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                s3_input_bucket="rag-bucket",
+                s3_input_key="raw/tenant-corp-01/hash/file.pdf",
+                s3_output_parquet_key="artifacts/tenant-corp-01/hash/slice_1_6.parquet",
+                start_page=1,
+                end_page=6,
+            ),
+            presigned_input_get_url="mock://input-url-attempt-2",
+            presigned_output_put_url="mock://output-url-attempt-2",
+            resume_checkpoint=checkpoint,
+        )
+
+        resp_dict = await env.run(DispatchDocAIExtractActivity, req.model_dump())
+        resp = ExtractSegmentResponse.model_validate(resp_dict)
+
+        # Processed units 5, 6 (2 units) without repeating 1..4
+        self.assertEqual(resp.extracted_segments, 2)
+        self.assertEqual(resp.extracted_pages, 6)
+        self.assertEqual(len(heartbeats), 2)
+        self.assertEqual(heartbeats[0][0]["last_processed_unit"], 5)
+        self.assertEqual(heartbeats[1][0]["last_processed_unit"], 6)
+
 
 if __name__ == "__main__":
     unittest.main()
