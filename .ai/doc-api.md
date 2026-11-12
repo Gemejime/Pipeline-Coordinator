@@ -228,6 +228,11 @@ When a dependency check fails while not draining:
 
 ## 2. Protobuf v3 gRPC Contracts
 
+### Authentication & Tenant Isolation Metadata
+Every `CoordinatorService` RPC enforces Bearer token authentication, optional `x-tenant-id` metadata consistency, request `tenant_id` matching against authenticated claims (preventing request payloads from overriding caller tenant identity), and per-method scopes via `UnaryAuthInterceptor` and `CoordinatorServer`:
+- **Metadata**: `authorization: Bearer <token>` (required; missing/invalid yields `UNAUTHENTICATED`), `x-tenant-id: <tenant_id>` (optional; mismatch yields `PERMISSION_DENIED`).
+- **Scopes**: `CreateUploadURL`, `CompleteUploadURL`, and `StartIngestion` require `ingest:write`; `GetIngestionStatus` requires `ingest:read` (missing scope or `tenant_id` mismatch yields `PERMISSION_DENIED`).
+
 ### Service Definition (`api/proto/v1/coordinator.proto`)
 
 ```protobuf
