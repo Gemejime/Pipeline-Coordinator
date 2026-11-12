@@ -251,10 +251,17 @@ func run(parentCtx context.Context, migrateOnly bool, logger *slog.Logger) error
 		stopWorkers(coordWorker, inspectWorker)
 		return fmt.Errorf("failed to listen on gRPC address %s: %w", grpcAddr, err)
 	}
-	grpcSrv := grpc.NewServer()
+	grpcSrv := grpc.NewServer(
+		grpc.UnaryInterceptor(grpctransport.UnaryAuthInterceptor(validator, logger)),
+	)
 	coordinatorv1.RegisterCoordinatorServiceServer(
 		grpcSrv,
-		grpctransport.NewCoordinatorServer(uploadSvc, execSvc, logger),
+		grpctransport.NewCoordinatorServer(
+			uploadSvc,
+			execSvc,
+			logger,
+			grpctransport.WithTokenValidator(validator),
+		),
 	)
 
 	errCh := make(chan error, 2)

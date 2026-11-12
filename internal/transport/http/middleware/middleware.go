@@ -287,6 +287,11 @@ func ClaimsFromContext(ctx context.Context) (*AuthClaims, bool) {
 	return c, ok && c != nil
 }
 
+// WithAuthClaims attaches authenticated AuthClaims to ctx for downstream handlers and transport adapters.
+func WithAuthClaims(ctx context.Context, claims *AuthClaims) context.Context {
+	return context.WithValue(ctx, ctxKeyAuthClaims, claims)
+}
+
 // RequestID middleware extracts or generates a high-entropy X-Request-ID and injects it
 // into the request context as trace_id and onto the response headers.
 func RequestID(next http.Handler) http.Handler {
