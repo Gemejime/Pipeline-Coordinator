@@ -116,9 +116,9 @@ func makeReadinessHandler(checkFn ReadinessCheckFunc, drainState *atomic.Bool) h
 	return func(w http.ResponseWriter, r *http.Request) {
 		if drainState != nil && drainState.Load() {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-				"status": "unavailable",
+				"status": "draining",
 				"checks": map[string]string{
-					"drain": "draining",
+					"drain": "shutting_down",
 				},
 			})
 			return
@@ -162,6 +162,12 @@ func handlePrometheusMetrics(w http.ResponseWriter, _ *http.Request) {
 		"# HELP coordinator_child_workflows_spawned Fan-out child workflows per document.",
 		"# TYPE coordinator_child_workflows_spawned histogram",
 		"coordinator_child_workflows_spawned_count 0",
+		"# HELP coordinator_child_workflows_completed_total Total completed child DocumentPartitionWorkflow executions.",
+		"# TYPE coordinator_child_workflows_completed_total counter",
+		"coordinator_child_workflows_completed_total 0",
+		"# HELP coordinator_child_workflows_failed_total Total failed child DocumentPartitionWorkflow executions.",
+		"# TYPE coordinator_child_workflows_failed_total counter",
+		"coordinator_child_workflows_failed_total 0",
 		"# HELP coordinator_redis_events_published_total Telemetry publication success count.",
 		"# TYPE coordinator_redis_events_published_total counter",
 		"coordinator_redis_events_published_total 0",

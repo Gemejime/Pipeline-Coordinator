@@ -380,10 +380,21 @@ func validateBucketAndKey(bucket, key string) error {
 	if strings.HasPrefix(trimmedKey, "/") || strings.Contains(trimmedKey, "\\") {
 		return fmt.Errorf("%w: invalid object key format", ErrInvalidS3Target)
 	}
-	for _, seg := range strings.Split(trimmedKey, "/") {
+	for start := 0; ; {
+		rel := strings.IndexByte(trimmedKey[start:], '/')
+		var seg string
+		if rel < 0 {
+			seg = trimmedKey[start:]
+		} else {
+			seg = trimmedKey[start : start+rel]
+		}
 		if seg == "" || seg == "." || seg == ".." {
 			return fmt.Errorf("%w: path traversal or empty segment in object key", ErrInvalidS3Target)
 		}
+		if rel < 0 {
+			break
+		}
+		start += rel + 1
 	}
 	return nil
 }

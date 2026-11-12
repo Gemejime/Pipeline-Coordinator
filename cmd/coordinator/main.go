@@ -42,6 +42,7 @@ const (
 	defaultGRPCAddr           = ":50051"
 	defaultTemporalHostPort   = "localhost:7233"
 	defaultTemporalNamespace  = "default"
+	defaultShutdownDrainDelay = 5 * time.Second
 	defaultShutdownTimeout    = 20 * time.Second
 	defaultReadinessProbeWait = 2 * time.Second
 )
@@ -282,8 +283,17 @@ func run(parentCtx context.Context, migrateOnly bool, logger *slog.Logger) error
 		return srvErr
 	}
 
-	// Zero-drop rolling/canary drain: immediately mark /ready as 503 Unavailable.
+	// Zero-drop rolling/canary drain: immediately mark /ready as 503 draining and wait
+	// SHUTDOWN_DRAIN_DELAY so Kubernetes Endpoints / kube-proxy de-register this pod
+	// before stopping HTTP/gRPC listeners (distroless has no shell for preStop sleep).
 	draining.Store(true)
+	drainDelay := envDuration("SHUTDOWN_DRAIN_DELAY", defaultShutdownDrainDelay)
+	if drainDelay > 0 {
+		logger.Info("waiting for endpoint drain window before server shutdown",
+			slog.Duration("drain_delay", drainDelay),
+		)
+		waitDrainWindow(drainDelay)
+	}
 	stopWorkers(coordWorker, inspectWorker)
 
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), defaultShutdownTimeout)
@@ -295,6 +305,15 @@ func run(parentCtx context.Context, migrateOnly bool, logger *slog.Logger) error
 	grpcSrv.GracefulStop()
 	logger.Info("coordinator shutdown complete")
 	return nil
+}
+
+func waitDrainWindow(d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	<-timer.C
 }
 
 func stopWorkers(coordWorker, inspectWorker worker.Worker) {
@@ -350,6 +369,18 @@ func envInt32(key string, fallback int32) int32 {
 		return fallback
 	}
 	return int32(parsed)
+}
+
+func envDuration(key string, fallback time.Duration) time.Duration {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(v)
+	if err != nil || parsed < 0 {
+		return fallback
+	}
+	return parsed
 }
 
 func splitCSV(raw string) []string {

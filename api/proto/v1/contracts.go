@@ -449,20 +449,26 @@ func (r PresignSliceArtifactResponse) LogValue() slog.Value {
 
 // ExtractSegmentRequest is the polyglot activity input on doc-ai-task-queue.
 type ExtractSegmentRequest struct {
-	Slice                 PartitionSlice `json:"slice"`
-	PresignedInputGetURL  string         `json:"presigned_input_get_url"`
-	PresignedOutputPutURL string         `json:"presigned_output_put_url"`
-	PipelineConfig        PipelineConfig `json:"pipeline_config"`
+	Slice                 PartitionSlice    `json:"slice"`
+	PresignedInputGetURL  string            `json:"presigned_input_get_url"`
+	PresignedOutputPutURL string            `json:"presigned_output_put_url"`
+	PipelineConfig        PipelineConfig    `json:"pipeline_config"`
+	ResumeCheckpoint      *HeartbeatDetails `json:"resume_checkpoint,omitempty"`
 }
 
 // LogValue implements slog.LogValuer to redact presigned URLs from structured logs.
 func (r ExtractSegmentRequest) LogValue() slog.Value {
+	var resumeUnit int32
+	if r.ResumeCheckpoint != nil {
+		resumeUnit = r.ResumeCheckpoint.LastProcessedUnit
+	}
 	return slog.GroupValue(
 		slog.String("slice_id", r.Slice.SliceID),
 		slog.Int("slice_index", int(r.Slice.SliceIndex)),
 		slog.String("s3_input_bucket", r.Slice.S3InputBucket),
 		slog.String("s3_input_key", r.Slice.S3InputKey),
 		slog.String("s3_output_parquet_key", r.Slice.S3OutputParquetKey),
+		slog.Int("resume_from_unit", int(resumeUnit)),
 		slog.String("presigned_input_get_url", "[REDACTED]"),
 		slog.String("presigned_output_put_url", "[REDACTED]"),
 	)

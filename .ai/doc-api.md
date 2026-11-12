@@ -202,19 +202,27 @@ Retrieves in-flight state from Temporal or terminal record from PostgreSQL.
   }
 }
 ```
-When draining during graceful shutdown (`SIGINT`/`SIGTERM`) or when a dependency check fails:
+When draining during graceful shutdown (`SIGINT`/`SIGTERM`) (bypassing dependency probes):
 ```json
 {
   "status": "draining",
   "checks": {
-    "drain": "shutting_down",
-    "temporal": "connected",
+    "drain": "shutting_down"
+  }
+}
+```
+When a dependency check fails while not draining:
+```json
+{
+  "status": "unavailable",
+  "checks": {
+    "temporal": "disconnected",
     "postgres": "connected",
     "redis": "connected"
   }
 }
 ```
-- **`GET /metrics`**: Exposes isolated Prometheus registry metrics (`coordinator_workflow_starts_total`, `coordinator_child_workflows_spawned`, `coordinator_redis_events_published_total`, `coordinator_redis_events_errors_total`, `temporal_activity_schedule_to_start_seconds`) in OpenMetrics/Prometheus text format.
+- **`GET /metrics`**: Exposes isolated Prometheus registry metrics (`coordinator_workflow_starts_total`, `coordinator_child_workflows_spawned`, `coordinator_child_workflows_completed_total`, `coordinator_child_workflows_failed_total`, `coordinator_redis_events_published_total`, `coordinator_redis_events_errors_total`, `temporal_activity_schedule_to_start_seconds`) in OpenMetrics/Prometheus text format.
 
 ---
 
@@ -429,6 +437,7 @@ message ExtractSegmentRequest {
   string presigned_input_get_url = 2;    // Redacted in logs
   string presigned_output_put_url = 3;   // Redacted in logs
   PipelineConfig pipeline_config = 4;
+  HeartbeatDetails resume_checkpoint = 5;
 }
 
 message ExtractSegmentResponse {

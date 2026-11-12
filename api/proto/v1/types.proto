@@ -105,6 +105,7 @@ message ExtractSegmentRequest {
   string presigned_input_get_url = 2;    // Redacted in logs
   string presigned_output_put_url = 3;   // Redacted in logs
   PipelineConfig pipeline_config = 4;
+  HeartbeatDetails resume_checkpoint = 5;
 }
 
 message ExtractSegmentResponse {

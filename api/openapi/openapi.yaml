@@ -304,7 +304,7 @@ paths:
                         type: string
                         example: connected
         '503':
-          description: Service dependencies unavailable or shutting down (drain mode active)
+          description: Service dependencies unavailable (`status=unavailable`) or shutting down (`status=draining`, `checks.drain=shutting_down`)
           content:
             application/json:
               schema:
@@ -312,13 +312,16 @@ paths:
                 properties:
                   status:
                     type: string
+                    enum:
+                      - draining
+                      - unavailable
                     example: draining
                   checks:
                     type: object
                     properties:
                       temporal:
                         type: string
-                        example: disconnected
+                        example: connected
                       postgres:
                         type: string
                         example: connected
@@ -360,7 +363,7 @@ paths:
   /metrics:
     get:
       summary: Prometheus Metrics
-      description: Returns Prometheus metrics formatted in OpenMetrics / Prometheus text standard.
+      description: Returns Prometheus metrics (`coordinator_workflow_starts_total`, `coordinator_child_workflows_spawned`, `coordinator_child_workflows_completed_total`, `coordinator_child_workflows_failed_total`, `coordinator_redis_events_published_total`, `coordinator_redis_events_errors_total`, `temporal_activity_schedule_to_start_seconds`) formatted in OpenMetrics / Prometheus text standard.
       operationId: getMetrics
       security: []
       responses:

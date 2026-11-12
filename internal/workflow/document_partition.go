@@ -109,6 +109,7 @@ func DocumentPartitionWorkflow(ctx workflow.Context, slice PartitionSlice) (*Par
 	}
 
 	var extractResp coordinatorv1.ExtractSegmentResponse
+	var resumeCheckpoint *coordinatorv1.HeartbeatDetails
 	for attempt := int32(1); attempt <= maxAttempts; attempt++ {
 		// Step 1: Issue fresh 15-minute presigned GET/PUT URLs before every extraction attempt
 		// so retries never reuse expired S3 URLs.
@@ -136,6 +137,7 @@ func DocumentPartitionWorkflow(ctx workflow.Context, slice PartitionSlice) (*Par
 		}
 
 		// Step 2: Dispatch extraction to Python Document AI workers on doc-ai-task-queue.
+		// Carry forward any recorded heartbeat checkpoint from a previous timed-out/crashed attempt.
 		// Note: Raw presigned URLs in presignResp are never logged.
 		err = workflow.ExecuteActivity(
 			extractCtx,
@@ -145,10 +147,17 @@ func DocumentPartitionWorkflow(ctx workflow.Context, slice PartitionSlice) (*Par
 				PresignedInputGetURL:  presignResp.PresignedInputGetURL,
 				PresignedOutputPutURL: presignResp.PresignedOutputPutURL,
 				PipelineConfig:        pipelineConfig,
+				ResumeCheckpoint:      resumeCheckpoint,
 			},
 		).Get(extractCtx, &extractResp)
 		if err == nil {
 			break
+		}
+
+		if extractedHB := extractHeartbeatCheckpoint(err); extractedHB != nil {
+			if resumeCheckpoint == nil || extractedHB.LastProcessedUnit > resumeCheckpoint.LastProcessedUnit {
+				resumeCheckpoint = extractedHB
+			}
 		}
 
 		if attempt >= maxAttempts || isNonRetryableExtractError(ctx, err, computeRetry.NonRetryableErrorTypes) {
@@ -279,4 +288,24 @@ func computeRetryBackoff(attempt int32, policy *temporal.RetryPolicy) time.Durat
 		return policy.MaximumInterval
 	}
 	return d
+}
+
+// extractHeartbeatCheckpoint extracts the latest HeartbeatDetails carried on a failed or timed-out
+// Temporal activity error so workflow-level re-presign retries can resume without duplicate work.
+func extractHeartbeatCheckpoint(err error) *coordinatorv1.HeartbeatDetails {
+	var timeoutErr *temporal.TimeoutError
+	if errors.As(err, &timeoutErr) && timeoutErr.HasLastHeartbeatDetails() {
+		var hb coordinatorv1.HeartbeatDetails
+		if decodeErr := timeoutErr.LastHeartbeatDetails(&hb); decodeErr == nil && hb.LastProcessedUnit > 0 {
+			return &hb
+		}
+	}
+	var appErr *temporal.ApplicationError
+	if errors.As(err, &appErr) && appErr.HasDetails() {
+		var hb coordinatorv1.HeartbeatDetails
+		if decodeErr := appErr.Details(&hb); decodeErr == nil && hb.LastProcessedUnit > 0 {
+			return &hb
+		}
+	}
+	return nil
 }

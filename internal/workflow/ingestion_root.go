@@ -374,6 +374,7 @@ func IngestionCoordinatorWorkflow(ctx workflow.Context, req IngestionRequest) (*
 			liveStatus.FailedSlices++
 			liveStatus.FailedSliceIDs = append(liveStatus.FailedSliceIDs, task.slice.SliceID)
 			lastSliceErr = err
+			workflow.GetMetricsHandler(ctx).Counter("coordinator_child_workflows_failed_total").Inc(1)
 
 			logger.Warn("isolated poison-pill partition slice failure (Runbook 3)",
 				"tenant_id", req.TenantID,
@@ -392,6 +393,7 @@ func IngestionCoordinatorWorkflow(ctx workflow.Context, req IngestionRequest) (*
 		liveStatus.CompletedSlices++
 		accumulatedChunks += childRes.CompiledChunks
 		accumulatedTokens += childRes.TotalTokens
+		workflow.GetMetricsHandler(ctx).Counter("coordinator_child_workflows_completed_total").Inc(1)
 	}
 
 	// ADR-002: If more slices remain, transition via ContinueAsNew to bound event history (<2,500 events).

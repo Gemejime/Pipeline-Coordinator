@@ -17,6 +17,8 @@ type Metrics struct {
 	registry                      *prometheus.Registry
 	WorkflowStartsTotal           *prometheus.CounterVec
 	ChildWorkflowsSpawned         prometheus.Histogram
+	ChildWorkflowsCompletedTotal  prometheus.Counter
+	ChildWorkflowsFailedTotal     prometheus.Counter
 	RedisEventsPublishedTotal     prometheus.Counter
 	RedisEventsErrorsTotal        prometheus.Counter
 	TemporalActivityScheduleStart *prometheus.HistogramVec
@@ -39,6 +41,20 @@ func NewMetrics() *Metrics {
 			Name:    "coordinator_child_workflows_spawned",
 			Help:    "Distribution of child DocumentPartitionWorkflow executions spawned per document.",
 			Buckets: []float64{1, 5, 10, 25, 50, 100, 250, 500, 1000},
+		},
+	)
+
+	childWorkflowsCompleted := prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "coordinator_child_workflows_completed_total",
+			Help: "Total child DocumentPartitionWorkflow executions that completed successfully.",
+		},
+	)
+
+	childWorkflowsFailed := prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "coordinator_child_workflows_failed_total",
+			Help: "Total child DocumentPartitionWorkflow executions that failed after retries.",
 		},
 	)
 
@@ -68,6 +84,8 @@ func NewMetrics() *Metrics {
 	reg.MustRegister(
 		workflowStarts,
 		childWorkflows,
+		childWorkflowsCompleted,
+		childWorkflowsFailed,
 		redisPublished,
 		redisErrors,
 		activityScheduleToStart,
@@ -77,6 +95,8 @@ func NewMetrics() *Metrics {
 		registry:                      reg,
 		WorkflowStartsTotal:           workflowStarts,
 		ChildWorkflowsSpawned:         childWorkflows,
+		ChildWorkflowsCompletedTotal:  childWorkflowsCompleted,
+		ChildWorkflowsFailedTotal:     childWorkflowsFailed,
 		RedisEventsPublishedTotal:     redisPublished,
 		RedisEventsErrorsTotal:        redisErrors,
 		TemporalActivityScheduleStart: activityScheduleToStart,
@@ -123,6 +143,22 @@ func (m *Metrics) ObserveChildWorkflowsSpawned(count int) {
 		return
 	}
 	m.ChildWorkflowsSpawned.Observe(float64(count))
+}
+
+// AddChildWorkflowsCompleted adds delta to coordinator_child_workflows_completed_total.
+func (m *Metrics) AddChildWorkflowsCompleted(delta int64) {
+	if m == nil || m.ChildWorkflowsCompletedTotal == nil || delta <= 0 {
+		return
+	}
+	m.ChildWorkflowsCompletedTotal.Add(float64(delta))
+}
+
+// AddChildWorkflowsFailed adds delta to coordinator_child_workflows_failed_total.
+func (m *Metrics) AddChildWorkflowsFailed(delta int64) {
+	if m == nil || m.ChildWorkflowsFailedTotal == nil || delta <= 0 {
+		return
+	}
+	m.ChildWorkflowsFailedTotal.Add(float64(delta))
 }
 
 // IncRedisEventPublished increments coordinator_redis_events_published_total.
@@ -188,8 +224,19 @@ func (h *temporalMetricsHandler) WithTags(tags map[string]string) client.Metrics
 	}
 }
 
-func (h *temporalMetricsHandler) Counter(string) client.MetricsCounter {
-	return nopCounter{}
+func (h *temporalMetricsHandler) Counter(name string) client.MetricsCounter {
+	switch name {
+	case "coordinator_child_workflows_completed_total":
+		return temporalCounterFunc(func(v int64) {
+			h.metrics.AddChildWorkflowsCompleted(v)
+		})
+	case "coordinator_child_workflows_failed_total":
+		return temporalCounterFunc(func(v int64) {
+			h.metrics.AddChildWorkflowsFailed(v)
+		})
+	default:
+		return nopCounter{}
+	}
 }
 
 func (h *temporalMetricsHandler) Gauge(name string) client.MetricsGauge {
@@ -230,3 +277,7 @@ func (f temporalTimerFunc) Record(d time.Duration) { f(d) }
 type temporalGaugeFunc func(float64)
 
 func (f temporalGaugeFunc) Update(v float64) { f(v) }
+
+type temporalCounterFunc func(int64)
+
+func (f temporalCounterFunc) Inc(v int64) { f(v) }

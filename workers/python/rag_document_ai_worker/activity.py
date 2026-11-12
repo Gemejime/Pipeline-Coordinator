@@ -118,8 +118,10 @@ async def DispatchDocAIExtractActivity(
     if total_units < 1:
         total_units = 1
 
-    # Inspect native Temporal heartbeat details for resumption checkpoint (ADR-003).
+    # Inspect native Temporal heartbeat details first, falling back to workflow-propagated
+    # resume_checkpoint across re-presign retry attempts (ADR-003).
     start_unit = 1
+    checkpoint: Optional[HeartbeatDetails] = None
     try:
         info = activity.info()
         if info and info.heartbeat_details:
@@ -128,16 +130,20 @@ async def DispatchDocAIExtractActivity(
                 checkpoint = HeartbeatDetails.model_validate(detail)
             else:
                 checkpoint = HeartbeatDetails.model_validate_json(detail)
-            start_unit = checkpoint.last_processed_unit + 1
-            logger.info(
-                "Resuming slice %s from heartbeat checkpoint unit %d/%d",
-                slice_info.slice_id,
-                start_unit,
-                total_units,
-            )
     except Exception as e:
         logger.warning("Could not parse heartbeat checkpoint details: %s", e)
-        start_unit = 1
+
+    if (checkpoint is None or checkpoint.last_processed_unit < 1) and req.resume_checkpoint is not None:
+        checkpoint = req.resume_checkpoint
+
+    if checkpoint is not None and checkpoint.last_processed_unit >= 1:
+        start_unit = checkpoint.last_processed_unit + 1
+        logger.info(
+            "Resuming slice %s from checkpoint unit %d/%d",
+            slice_info.slice_id,
+            start_unit,
+            total_units,
+        )
 
     units_data: List[Dict[str, Any]] = []
 

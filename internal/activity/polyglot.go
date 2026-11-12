@@ -74,8 +74,14 @@ func (a *PolyglotWorkerActivities) DispatchDocAIExtract(
 
 	totalUnits := computeSliceTotalUnits(slice)
 	var checkpoint coordinatorv1.HeartbeatDetails
+	hasHeartbeat := false
 	if activity.HasHeartbeatDetails(ctx) {
-		_ = activity.GetHeartbeatDetails(ctx, &checkpoint)
+		if err := activity.GetHeartbeatDetails(ctx, &checkpoint); err == nil && checkpoint.LastProcessedUnit > 0 {
+			hasHeartbeat = true
+		}
+	}
+	if !hasHeartbeat && req.ResumeCheckpoint != nil && req.ResumeCheckpoint.LastProcessedUnit > 0 {
+		checkpoint = *req.ResumeCheckpoint
 	}
 
 	startUnit := checkpoint.LastProcessedUnit + 1

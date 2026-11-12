@@ -78,6 +78,7 @@ class ExtractSegmentRequest(BaseModel):
     presigned_input_get_url: str = Field(default="")
     presigned_output_put_url: str = Field(default="")
     pipeline_config: PipelineConfig = Field(default_factory=PipelineConfig)
+    resume_checkpoint: Optional[HeartbeatDetails] = Field(default=None)
 
 
 class ExtractSegmentResponse(BaseModel):
