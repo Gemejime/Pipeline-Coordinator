@@ -1,0 +1,106 @@
+## ==============================================================================
+## Bitnami Redis Cluster 7.2 Production Values for rag-ingestion-coordinator
+## Chart: bitnami/redis-cluster (v11.x)
+## Topology: 6 Nodes (3 Primary Shards + 3 Secondary Replicas)
+## ==============================================================================
+
+global:
+  redis:
+    existingSecret: "rag-ingestion-coordinator-secrets"
+    existingSecretPasswordKey: "REDIS_PASSWORD"
+
+## Enable password authentication referencing the shared microservice secret
+usePassword: true
+usePasswordFile: false
+
+## 6-node clustered topology: 3 master shards + 1 replica per shard (3 * 2 = 6 pods)
+cluster:
+  init: true
+  nodes: 6
+  replicas: 1
+  defaultExtraConfig: |
+    # Optimized for Redis 7.2 in-cluster low-latency event publishing
+    cluster-node-timeout 5000
+    cluster-migration-barrier 1
+    cluster-require-full-coverage yes
+    appendonly yes
+    appendfsync everysec
+    maxmemory 768mb
+    maxmemory-policy volatile-lru
+    tcp-backlog 511
+    timeout 0
+    tcp-keepalive 300
+
+## Container resource boundaries (Strict memory ceiling & CPU throttling defense)
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 1Gi
+
+## State persistence (AOF + RDB snapshotting)
+persistence:
+  enabled: true
+  path: /bitnami/redis/data
+  size: 5Gi
+  accessModes:
+    - ReadWriteOnce
+
+## High Availability & Failure Domain Spreading: Soft pod anti-affinity across cluster hosts
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis-cluster
+              app.kubernetes.io/instance: rag-ingestion-coordinator-redis
+      - weight: 50
+        podAffinityTerm:
+          topologyKey: topology.kubernetes.io/zone
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis-cluster
+              app.kubernetes.io/instance: rag-ingestion-coordinator-redis
+
+## Pod Disruption Budget to guarantee quorum during node drains
+pdb:
+  create: true
+  minAvailable: 4
+
+## Integrated Prometheus metrics exporter (Port 9121)
+metrics:
+  enabled: true
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9121"
+    prometheus.io/path: "/metrics"
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+  serviceMonitor:
+    enabled: false
+
+## Pod Security Context adhering to non-root Bitnami standards
+podSecurityContext:
+  enabled: true
+  fsGroup: 1001
+  sysctls: []
+
+containerSecurityContext:
+  enabled: true
+  runAsUser: 1001
+  runAsNonRoot: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+

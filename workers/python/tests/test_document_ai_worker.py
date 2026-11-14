@@ -263,5 +263,120 @@ class TestDispatchDocAIExtractActivity(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(heartbeats[1][0]["last_processed_unit"], 6)
 
 
+class TestWorkerDotEnv(unittest.TestCase):
+    """Verifies Python worker .env loading respects process env precedence."""
+
+    def test_load_dotenv_sets_missing_and_preserves_existing(self):
+        import os
+        import tempfile
+        from pathlib import Path
+        from workers.python.rag_document_ai_worker.worker import load_dotenv
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env_path = Path(tmpdir) / ".env"
+            env_path.write_text(
+                "PY_DOTENV_HOST=temporal.example:7233 # comment\n"
+                "export PY_DOTENV_NS='staging'\n"
+                "PY_DOTENV_EXISTING=from-file\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"PY_DOTENV_EXISTING": "from-env"}, clear=False):
+                os.environ.pop("PY_DOTENV_HOST", None)
+                os.environ.pop("PY_DOTENV_NS", None)
+                load_dotenv(str(env_path))
+                self.assertEqual(os.environ.get("PY_DOTENV_HOST"), "temporal.example:7233")
+                self.assertEqual(os.environ.get("PY_DOTENV_NS"), "staging")
+                self.assertEqual(os.environ.get("PY_DOTENV_EXISTING"), "from-env")
+
+
+class TestSyncEnvToDeploymentsScript(unittest.TestCase):
+    """Verifies scripts/sync_env_to_deployments.py drift detection and credential filtering."""
+
+    @classmethod
+    def setUpClass(cls):
+        import sys
+        from pathlib import Path
+        repo_root = Path(__file__).resolve().parents[3]
+        scripts_dir = str(repo_root / "scripts")
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+
+    def test_sensitive_filtering(self):
+        import sync_env_to_deployments as sync_script
+
+        self.assertTrue(sync_script.is_sensitive("AUTH_HMAC_SECRET"))
+        self.assertTrue(sync_script.is_sensitive("POSTGRES_PASSWORD"))
+        self.assertTrue(sync_script.is_sensitive("AWS_ACCESS_KEY_ID"))
+        self.assertTrue(sync_script.is_sensitive("AWS_SESSION_TOKEN"))
+        self.assertTrue(sync_script.is_sensitive("POSTGRES_DSN"))
+        self.assertFalse(sync_script.is_sensitive("secretName"))
+        self.assertFalse(sync_script.is_sensitive("LOG_LEVEL"))
+        self.assertFalse(sync_script.is_sensitive("PORT"))
+        self.assertFalse(sync_script.is_sensitive("S3_BUCKET"))
+
+    def test_check_drift_on_current_workspace_passes(self):
+        from pathlib import Path
+        repo_root = Path(__file__).resolve().parents[3]
+        env_prod = repo_root / ".env.prod"
+        values_yaml = repo_root / "deployments" / "helm" / "values.yaml"
+        import sync_env_to_deployments as sync_script
+
+        clean, drifts = sync_script.check_drift(env_prod, values_yaml)
+        self.assertTrue(clean, f"Expected zero drift, got: {drifts}")
+        self.assertEqual(len(drifts), 0)
+
+
+class TestInjectK8sSecretsScript(unittest.TestCase):
+    """Verifies scripts/inject_k8s_secrets.py validation, masking, and manifest generation."""
+
+    @classmethod
+    def setUpClass(cls):
+        import sys
+        from pathlib import Path
+        repo_root = Path(__file__).resolve().parents[3]
+        scripts_dir = str(repo_root / "scripts")
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+
+    def test_secret_validation_and_manifest_generation(self):
+        import inject_k8s_secrets as inject_mod
+
+        # Missing required secrets
+        valid, errors = inject_mod.validate_secrets({})
+        self.assertFalse(valid)
+        self.assertTrue(any("POSTGRES_DSN" in err for err in errors))
+        self.assertTrue(any("AUTH_HMAC_SECRET" in err for err in errors))
+
+        # Too short HMAC secret
+        valid, errors = inject_mod.validate_secrets({
+            "POSTGRES_DSN": "postgres://user:pass@localhost:5432/db",
+            "AUTH_HMAC_SECRET": "too-short",
+        })
+        self.assertFalse(valid)
+        self.assertTrue(any("minimum security requirement" in err for err in errors))
+
+        # Valid secrets generate proper Kubernetes manifest
+        valid_secrets = {
+            "POSTGRES_DSN": "postgres://user:pass@localhost:5432/db",
+            "AUTH_HMAC_SECRET": "12345678901234567890123456789012",
+            "REDIS_PASSWORD": "redis-pass-val",
+        }
+        valid, errors = inject_mod.validate_secrets(valid_secrets)
+        self.assertTrue(valid)
+        self.assertEqual(len(errors), 0)
+
+        yaml_str = inject_mod.generate_secret_manifest_yaml(
+            "test-secrets", "test-ns", valid_secrets
+        )
+        self.assertIn("kind: Secret", yaml_str)
+        self.assertIn("name: test-secrets", yaml_str)
+        self.assertIn("namespace: test-ns", yaml_str)
+        self.assertIn("POSTGRES_DSN:", yaml_str)
+        self.assertIn("AUTH_HMAC_SECRET:", yaml_str)
+        self.assertIn("REDIS_PASSWORD:", yaml_str)
+        # Verify base64 encoding (not cleartext)
+        self.assertNotIn("postgres://user:pass", yaml_str)
+
+
 if __name__ == "__main__":
     unittest.main()

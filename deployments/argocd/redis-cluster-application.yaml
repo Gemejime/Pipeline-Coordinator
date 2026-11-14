@@ -1,0 +1,97 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: rag-ingestion-coordinator-redis
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: redis-cluster
+    app.kubernetes.io/part-of: rag-platform
+    app.kubernetes.io/component: telemetry-event-bus
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://charts.bitnami.com/bitnami
+    chart: redis-cluster
+    targetRevision: 11.0.1
+    helm:
+      releaseName: rag-ingestion-coordinator-redis
+      values: |
+        global:
+          redis:
+            existingSecret: "rag-ingestion-coordinator-secrets"
+            existingSecretPasswordKey: "REDIS_PASSWORD"
+        usePassword: true
+        usePasswordFile: false
+        cluster:
+          init: true
+          nodes: 6
+          replicas: 1
+          defaultExtraConfig: |
+            cluster-node-timeout 5000
+            cluster-migration-barrier 1
+            cluster-require-full-coverage yes
+            appendonly yes
+            appendfsync everysec
+            maxmemory 768mb
+            maxmemory-policy volatile-lru
+            tcp-backlog 511
+            timeout 0
+            tcp-keepalive 300
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 1Gi
+        persistence:
+          enabled: true
+          path: /bitnami/redis/data
+          size: 5Gi
+        affinity:
+          podAntiAffinity:
+            preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 100
+                podAffinityTerm:
+                  topologyKey: kubernetes.io/hostname
+                  labelSelector:
+                    matchLabels:
+                      app.kubernetes.io/name: redis-cluster
+                      app.kubernetes.io/instance: rag-ingestion-coordinator-redis
+        pdb:
+          create: true
+          minAvailable: 4
+        metrics:
+          enabled: true
+          podAnnotations:
+            prometheus.io/scrape: "true"
+            prometheus.io/port: "9121"
+            prometheus.io/path: "/metrics"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: rag-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+      - PruneLast=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+

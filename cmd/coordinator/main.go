@@ -25,6 +25,7 @@ import (
 
 	coordinatorv1 "rag-ingestion-coordinator/api/proto/v1"
 	"rag-ingestion-coordinator/internal/activity"
+	"rag-ingestion-coordinator/internal/config"
 	"rag-ingestion-coordinator/internal/service"
 	"rag-ingestion-coordinator/internal/store/postgres"
 	redisstore "rag-ingestion-coordinator/internal/store/redis"
@@ -51,9 +52,15 @@ func main() {
 	migrateOnly := flag.Bool("migrate", false, "apply idempotent PostgreSQL schema migrations and exit")
 	flag.Parse()
 
+	dotEnvErr := config.LoadDotEnv("")
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: parseLogLevel(os.Getenv("LOG_LEVEL")),
 	}))
+	if dotEnvErr != nil {
+		logger.Warn("failed to load .env file; continuing with process environment",
+			slog.String("error", dotEnvErr.Error()),
+		)
+	}
 
 	if err := run(context.Background(), *migrateOnly, logger); err != nil {
 		logger.Error("coordinator exited with error", slog.String("error", err.Error()))
@@ -94,7 +101,11 @@ func run(parentCtx context.Context, migrateOnly bool, logger *slog.Logger) error
 
 	metrics := telemetry.NewMetrics()
 
-	redisAddrs := splitCSV(envOrDefault("REDIS_ADDRS", "localhost:6379"))
+	redisRawAddrs := os.Getenv("REDIS_CLUSTER_ADDRS")
+	if strings.TrimSpace(redisRawAddrs) == "" {
+		redisRawAddrs = envOrDefault("REDIS_ADDRS", "localhost:6379")
+	}
+	redisAddrs := splitCSV(redisRawAddrs)
 	redisPub, err := redisstore.NewPublisher(redisstore.Config{
 		Addrs:      redisAddrs,
 		MasterName: os.Getenv("REDIS_MASTER_NAME"),
