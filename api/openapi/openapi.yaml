@@ -1,0 +1,650 @@
+openapi: 3.1.0
+info:
+  title: RAG Ingestion Coordinator API
+  version: 1.0.0
+  description: >
+    Control plane API for rag-ingestion-coordinator, providing presigned S3 upload
+    URL issuance, ingestion workflow triggers, and status inspection.
+servers:
+  - url: http://localhost:8080
+    description: Local coordinator gateway
+
+security:
+  - BearerAuth: []
+
+paths:
+  /v1/ingest/upload-url:
+    post:
+      summary: Request Presigned S3 Upload URL
+      description: >
+        Issues a cryptographically signed, time-limited presigned S3 upload URL
+        for direct multipart or single-part binary uploads bypassing coordinator heap.
+      operationId: createUploadURL
+      security:
+        - BearerAuth:
+            - ingest:write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUploadURLRequest'
+      responses:
+        '200':
+          description: Presigned upload URL created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateUploadURLResponse'
+        '400':
+          description: Invalid parameters, bad MIME type, or payload exceeds 10GB limit
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden (cross-tenant mismatch or missing ingest:write scope)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Control-plane JSON request body exceeds 64 KiB ceiling
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit exceeded
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/ingest/upload-url/complete:
+    post:
+      summary: Complete Multipart S3 Upload
+      description: Finalizes an S3 multipart upload with the client-submitted part ETags.
+      operationId: completeUploadURL
+      security:
+        - BearerAuth:
+            - ingest:write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompleteMultipartUploadRequest'
+      responses:
+        '200':
+          description: Multipart upload completed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompleteMultipartUploadResponse'
+        '400':
+          description: Bad part manifest or missing parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden (cross-tenant mismatch or missing ingest:write scope)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Control-plane JSON request body exceeds 64 KiB ceiling
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit exceeded
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/ingest/workflows/start:
+    post:
+      summary: Start Ingestion Workflow
+      description: Triggers the root IngestionCoordinatorWorkflow on Temporal.
+      operationId: startIngestionWorkflow
+      security:
+        - BearerAuth:
+            - ingest:write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartIngestionRequest'
+      responses:
+        '202':
+          description: Workflow accepted and scheduled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StartIngestionResponse'
+        '400':
+          description: Bad request payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden (cross-tenant mismatch or missing ingest:write scope)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: Control-plane JSON request body exceeds 64 KiB ceiling
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit exceeded
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/ingest/workflows/{id}/status:
+    get:
+      summary: Query Workflow Status
+      description: >
+        Retrieves in-flight workflow state or terminal cataloged run metrics.
+        Tenant isolation is strictly enforced by deriving `tenant_id` from the
+        authenticated Bearer token claims and verifying it against the supplied
+        `tenant_id` query parameter.
+      operationId: getWorkflowStatus
+      security:
+        - BearerAuth:
+            - ingest:read
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The Temporal Workflow ID
+          schema:
+            type: string
+        - name: tenant_id
+          in: query
+          required: true
+          description: >
+            Required tenant identifier filter; validated strictly against the
+            authenticated Bearer token claims to prevent cross-tenant access.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Workflow status details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowStatusResponse'
+        '400':
+          description: Missing or invalid tenant_id query parameter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden (cross-tenant mismatch or missing ingest:read scope)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Workflow not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit exceeded
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /healthz:
+    get:
+      summary: Liveness Probe
+      description: Verifies HTTP server event loop vitality.
+      operationId: livenessProbe
+      security: []
+      responses:
+        '200':
+          description: Service is alive
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: healthy
+
+  /ready:
+    get:
+      summary: Readiness Probe
+      description: Verifies active connections to Temporal, PostgreSQL, and Redis.
+      operationId: readinessProbe
+      security: []
+      responses:
+        '200':
+          description: Service dependencies are ready
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ready
+                  checks:
+                    type: object
+                    properties:
+                      temporal:
+                        type: string
+                        example: connected
+                      postgres:
+                        type: string
+                        example: connected
+                      redis:
+                        type: string
+                        example: connected
+        '503':
+          description: Service dependencies unavailable (`status=unavailable`) or shutting down (`status=draining`, `checks.drain=shutting_down`)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum:
+                      - draining
+                      - unavailable
+                    example: draining
+                  checks:
+                    type: object
+                    properties:
+                      temporal:
+                        type: string
+                        example: connected
+                      postgres:
+                        type: string
+                        example: connected
+                      redis:
+                        type: string
+                        example: connected
+                      drain:
+                        type: string
+                        example: shutting_down
+
+  /openapi.yaml:
+    get:
+      summary: OpenAPI Specification
+      description: Raw OpenAPI 3.1 YAML specification.
+      operationId: getOpenAPISpec
+      security: []
+      responses:
+        '200':
+          description: OpenAPI 3.1 YAML document
+          content:
+            application/yaml:
+              schema:
+                type: string
+
+  /docs:
+    get:
+      summary: Swagger UI Documentation
+      description: Interactive Swagger UI documentation page.
+      operationId: getDocs
+      security: []
+      responses:
+        '200':
+          description: HTML page rendering Swagger UI
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /metrics:
+    get:
+      summary: Prometheus Metrics
+      description: Returns Prometheus metrics (`coordinator_workflow_starts_total`, `coordinator_child_workflows_spawned`, `coordinator_child_workflows_completed_total`, `coordinator_child_workflows_failed_total`, `coordinator_redis_events_published_total`, `coordinator_redis_events_errors_total`, `temporal_activity_schedule_to_start_seconds`) formatted in OpenMetrics / Prometheus text standard.
+      operationId: getMetrics
+      security: []
+      responses:
+        '200':
+          description: Prometheus metrics text stream
+          content:
+            text/plain:
+              schema:
+                type: string
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >
+        Bearer JWT token authenticating the tenant and authorizing `ingest:write`
+        or `ingest:read` scopes.
+  schemas:
+    CreateUploadURLRequest:
+      type: object
+      required:
+        - tenant_id
+        - filename
+        - content_type
+        - content_length_bytes
+        - content_hash
+      properties:
+        tenant_id:
+          type: string
+          example: tenant-corp-01
+        filename:
+          type: string
+          example: quarterly_report.pdf
+        content_type:
+          type: string
+          example: application/pdf
+        content_length_bytes:
+          type: integer
+          format: int64
+          maximum: 10737418240
+          example: 104857600
+        content_hash:
+          type: string
+          description: SHA-256 digest of payload for idempotent addressing
+          example: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+
+    CreateUploadURLResponse:
+      type: object
+      required:
+        - upload_id
+        - tenant_id
+        - s3_bucket
+        - s3_key
+        - expires_at_unix
+        - lease_seconds
+      properties:
+        upload_id:
+          type: string
+          example: upl_01HXYZ1234567890ABCDEF
+        tenant_id:
+          type: string
+          example: tenant-corp-01
+        s3_bucket:
+          type: string
+          example: rag-ingestion-bucket
+        s3_key:
+          type: string
+          example: raw/tenant-corp-01/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/quarterly_report.pdf
+        presigned_url:
+          type: string
+          format: uri
+          description: Pre-authenticated S3 upload URL for single-part uploads (Redacted in logs)
+        part_size_bytes:
+          type: integer
+          format: int64
+          example: 104857600
+        parts:
+          type: array
+          maxItems: 10000
+          description: Presigned part URLs for multipart uploads (files >100MB up to 10GB)
+          items:
+            $ref: '#/components/schemas/PresignedPart'
+        expires_at_unix:
+          type: integer
+          format: int64
+          description: UTC Unix epoch timestamp in seconds when the presigned upload lease expires
+          example: 1794040500
+        lease_seconds:
+          type: integer
+          format: int32
+          example: 900
+
+    PresignedPart:
+      type: object
+      required:
+        - part_number
+        - presigned_url
+      properties:
+        part_number:
+          type: integer
+          example: 1
+        presigned_url:
+          type: string
+          format: uri
+          description: Presigned upload URL for this specific part
+
+    CompleteMultipartUploadRequest:
+      type: object
+      required:
+        - upload_id
+        - tenant_id
+        - s3_bucket
+        - s3_key
+        - parts
+      properties:
+        upload_id:
+          type: string
+          example: mp_upload_01HXYZ1234567890ABCDEF
+        tenant_id:
+          type: string
+          example: tenant-corp-01
+        s3_bucket:
+          type: string
+          example: rag-ingestion-bucket
+        s3_key:
+          type: string
+          example: raw/tenant-corp-01/hash/quarterly_report.pdf
+        parts:
+          type: array
+          maxItems: 10000
+          items:
+            $ref: '#/components/schemas/CompletedPart'
+
+    CompletedPart:
+      type: object
+      required:
+        - part_number
+        - etag
+      properties:
+        part_number:
+          type: integer
+          example: 1
+        etag:
+          type: string
+          example: "\"d41d8cd98f00b204e9800998ecf8427e\""
+
+    CompleteMultipartUploadResponse:
+      type: object
+      required:
+        - upload_id
+        - status
+        - s3_location
+        - completed_at
+      properties:
+        upload_id:
+          type: string
+          example: mp_upload_01HXYZ1234567890ABCDEF
+        status:
+          type: string
+          example: COMPLETED
+        s3_location:
+          type: string
+          example: s3://rag-ingestion-bucket/raw/tenant-corp-01/hash/quarterly_report.pdf
+        completed_at:
+          type: string
+          format: date-time
+          example: 2026-11-07T08:30:00Z
+
+    StartIngestionRequest:
+      type: object
+      required:
+        - tenant_id
+        - document_id
+        - s3_bucket
+        - s3_key
+        - content_hash
+        - total_bytes
+        - mime_type
+      properties:
+        tenant_id:
+          type: string
+          example: tenant-corp-01
+        document_id:
+          type: string
+          example: doc-01HXYZ1234567890
+        s3_bucket:
+          type: string
+          example: rag-ingestion-bucket
+        s3_key:
+          type: string
+          example: raw/tenant-corp-01/hash/quarterly_report.pdf
+        content_hash:
+          type: string
+          example: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+        total_bytes:
+          type: integer
+          format: int64
+          example: 104857600
+        mime_type:
+          type: string
+          example: application/pdf
+        pipeline_config_id:
+          type: string
+          example: default-multimodal-v1
+
+    StartIngestionResponse:
+      type: object
+      required:
+        - workflow_id
+        - run_id
+        - status
+        - started_at_unix
+      properties:
+        workflow_id:
+          type: string
+          example: ingest-tenant-corp-01-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+        run_id:
+          type: string
+          format: uuid
+          example: 4b68a85c-197e-4074-a698-c9ceca2ef11d
+        status:
+          type: string
+          example: RUNNING
+        started_at_unix:
+          type: integer
+          format: int64
+          description: UTC Unix epoch timestamp in seconds when the workflow execution started
+          example: 1794039600
+
+    WorkflowStatusResponse:
+      type: object
+      required:
+        - workflow_id
+        - run_id
+        - tenant_id
+        - status
+      properties:
+        workflow_id:
+          type: string
+        run_id:
+          type: string
+        tenant_id:
+          type: string
+        status:
+          type: string
+          example: COMPLETED
+        total_slices:
+          type: integer
+          example: 8
+        completed_slices:
+          type: integer
+          example: 8
+        failed_slices:
+          type: integer
+          example: 0
+        total_pages:
+          type: integer
+          example: 400
+        duration_seconds:
+          type: number
+          format: double
+          example: 45.2
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          example: BAD_REQUEST
+        message:
+          type: string
+          example: Unsupported MIME type
+

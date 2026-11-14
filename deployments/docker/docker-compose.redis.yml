@@ -1,0 +1,36 @@
+services:
+  redis:
+    image: bitnami/redis:7.2-debian-12
+    container_name: rag-ingestion-coordinator-redis-local
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    environment:
+      - ALLOW_EMPTY_PASSWORD=no
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-redispassword123}
+      - REDIS_AOF_ENABLED=yes
+      - REDIS_DISABLE_COMMANDS=FLUSHDB,FLUSHALL
+      - REDIS_MAXMEMORY=512mb
+      - REDIS_MAXMEMORY_POLICY=volatile-lru
+    volumes:
+      - redis_data:/bitnami/redis/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD:-redispassword123}\" ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.2"
+          memory: 128M
+
+volumes:
+  redis_data:
+    name: rag-ingestion-coordinator-redis-data
+    driver: local
+

@@ -1,0 +1,143 @@
+name: CD - Secret Injection & Deployment
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target Deployment Environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      action:
+        description: 'Execution Action'
+        required: true
+        default: 'deploy'
+        type: choice
+        options:
+          - deploy
+          - inject-secrets-only
+      dry_run:
+        description: 'Dry Run (validate secret injection and Helm render without applying)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  id-token: write # Required for AWS IAM OIDC federation
+
+concurrency:
+  group: cd-${{ inputs.environment || 'staging' }}
+  cancel-in-progress: false
+
+jobs:
+  inject-and-deploy:
+    name: Inject Secrets & Deploy (${{ inputs.environment || 'staging' }})
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || 'staging' }}
+    env:
+      K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE || 'default' }}
+      K8S_SECRET_NAME: ${{ vars.K8S_SECRET_NAME || 'rag-ingestion-coordinator-secrets' }}
+      DRY_RUN: ${{ inputs.dry_run || false }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: v1.31.0
+
+      - name: Configure Kubernetes Credentials
+        if: ${{ env.DRY_RUN != 'true' }}
+        run: |
+          # Prioritize Kubeconfig if provided in secrets
+          if [ -n "${{ secrets.KUBECONFIG }}" ]; then
+            echo "[INFO] Configuring cluster access via KUBECONFIG secret..."
+            mkdir -p "$HOME/.kube"
+            echo "${{ secrets.KUBECONFIG }}" | base64 -d > "$HOME/.kube/config" 2>/dev/null || \
+            echo "${{ secrets.KUBECONFIG }}" > "$HOME/.kube/config"
+            chmod 600 "$HOME/.kube/config"
+          elif [ -n "${{ secrets.AWS_ROLE_TO_ASSUME }}" ] && [ -n "${{ vars.AWS_EKS_CLUSTER_NAME }}" ]; then
+            echo "[INFO] Configuring cluster access via AWS IAM OIDC & EKS..."
+            aws eks update-kubeconfig \
+              --region "${{ vars.AWS_REGION || 'us-east-1' }}" \
+              --name "${{ vars.AWS_EKS_CLUSTER_NAME }}"
+          else
+            echo "[WARN] Neither KUBECONFIG nor AWS_ROLE_TO_ASSUME found. Proceeding with dry-run mode."
+            echo "DRY_RUN=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Mask Sensitive Variables
+        run: |
+          # Explicitly register secret masks in runner to prevent accidental log disclosure
+          echo "::add-mask::${{ secrets.POSTGRES_DSN }}"
+          echo "::add-mask::${{ secrets.AUTH_HMAC_SECRET }}"
+          echo "::add-mask::${{ secrets.REDIS_PASSWORD }}"
+          echo "::add-mask::${{ secrets.AUTH_STATIC_TOKENS_JSON }}"
+          echo "::add-mask::${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+
+      - name: CI/CD Secret Injection (Kubernetes Secret)
+        env:
+          POSTGRES_DSN: ${{ secrets.POSTGRES_DSN }}
+          AUTH_HMAC_SECRET: ${{ secrets.AUTH_HMAC_SECRET }}
+          REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+          AUTH_STATIC_TOKENS_JSON: ${{ secrets.AUTH_STATIC_TOKENS_JSON }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          set +x
+          EXTRA_ARGS=""
+          if [ "$DRY_RUN" = "true" ]; then
+            EXTRA_ARGS="--dry-run"
+          fi
+
+          python scripts/inject_k8s_secrets.py \
+            --namespace "$K8S_NAMESPACE" \
+            --secret-name "$K8S_SECRET_NAME" \
+            $EXTRA_ARGS
+
+      - name: Deploy Helm Chart
+        if: ${{ inputs.action != 'inject-secrets-only' }}
+        run: |
+          HELM_ARGS=(
+            upgrade --install rag-ingestion-coordinator deployments/helm
+            --namespace "$K8S_NAMESPACE"
+            --values deployments/helm/values.yaml
+            --set secrets.existingSecret="$K8S_SECRET_NAME"
+          )
+
+          if [ "$DRY_RUN" = "true" ]; then
+            HELM_ARGS+=(--dry-run)
+            echo "[INFO] Running Helm in dry-run mode..."
+          fi
+
+          helm "${HELM_ARGS[@]}"
+
+      - name: Verify Rollout Status
+        if: ${{ inputs.action != 'inject-secrets-only' && env.DRY_RUN != 'true' }}
+        run: |
+          echo "[INFO] Awaiting workload rollout completion..."
+          kubectl rollout status deployment/rag-ingestion-coordinator \
+            --namespace "$K8S_NAMESPACE" \
+            --timeout=180s
+

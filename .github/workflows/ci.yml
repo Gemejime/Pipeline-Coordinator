@@ -1,0 +1,238 @@
+name: CI - RAG Ingestion Coordinator
+
+on:
+  push:
+    branches: [ "main", "rag-ingestion-coordinator" ]
+  pull_request:
+    branches: [ "main", "rag-ingestion-coordinator" ]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-and-typecheck:
+    name: Lint & Typecheck (Go 1.26+)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.11'
+          check-latest: true
+          cache: true
+
+      - name: Verify Dependencies
+        run: |
+          if [ -f "go.mod" ]; then
+            go mod verify
+          else
+            echo "go.mod not yet created; skipping go mod verify."
+          fi
+
+      - name: Go Formatting Check
+        run: |
+          UNFORMATTED=$(gofmt -s -l . || true)
+          if [ -n "$UNFORMATTED" ]; then
+            echo "The following files are unformatted:"
+            echo "$UNFORMATTED"
+            exit 1
+          fi
+
+      - name: Go Vet Analysis
+        run: |
+          if [ -f "go.mod" ]; then
+            go vet ./...
+          else
+            echo "go.mod not yet created; skipping go vet."
+          fi
+
+      - name: GolangCI-Lint
+        if: hashFiles('go.mod') != ''
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.15.0
+          args: --timeout=5m
+
+  security-and-logging-audit:
+    name: Security & Logging Audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.11'
+          cache: true
+
+      - name: Run Go Vulnerability Check (govulncheck)
+        run: |
+          if [ -f "go.mod" ]; then
+            go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+            govulncheck ./...
+          fi
+
+      - name: Run Gosec AST Scanner
+        run: |
+          if [ -f "go.mod" ]; then
+            go install github.com/securego/gosec/v2/cmd/gosec@v2.21.4
+            gosec -fmt=text -severity=medium ./...
+          fi
+
+      - name: Secured Logging Audit
+        run: |
+          echo "Auditing codebase for secured logging invariants..."
+          # Reject log statements containing raw authorization tokens, bearer tokens, or sensitive URL queries
+          FAIL=0
+          if grep -rEi "(log|logger|slog)\.(Info|Error|Debug|Warn).*Bearer\s+" internal/ cmd/ 2>/dev/null; then
+            echo "ERROR: Potential Bearer token logged in cleartext!"
+            FAIL=1
+          fi
+          if grep -rEi "(log|logger|slog)\.(Info|Error|Debug|Warn|Printf|Println|Print).*(X-Amz-Signature|X-Amz-Credential|AWSAccessKeyId)" internal/ cmd/ 2>/dev/null; then
+            echo "ERROR: AWS STS / Presigned credentials found in log statements!"
+            FAIL=1
+          fi
+          if [ $FAIL -eq 1 ]; then
+            exit 1
+          fi
+          echo "Secured Logging Audit Passed: Zero cleartext tokens or credentials detected."
+
+  openapi-and-contract-sync:
+    name: OpenAPI 3.1 & Doc API Contract Sync
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Validate OpenAPI 3.1 Schema Syntax
+        run: |
+          if [ -f "api/openapi/openapi.yaml" ]; then
+            echo "Validating OpenAPI specification..."
+            npx @stoplight/spectral-cli lint --ruleset .spectral.yaml api/openapi/openapi.yaml
+          else
+            echo "api/openapi/openapi.yaml not yet present, checking documentation sync..."
+          fi
+
+      - name: Ensure Doc API Contract Synchronization
+        run: |
+          echo "Verifying .ai/doc-api.md synchronization with API specifications..."
+          if [ ! -f ".ai/doc-api.md" ]; then
+            echo "CRITICAL: .ai/doc-api.md is missing! Doc API must always be maintained."
+            exit 1
+          fi
+          
+          # Check that endpoints defined in openapi.yaml exist in .ai/doc-api.md
+          if [ -f "api/openapi/openapi.yaml" ]; then
+            # Extract endpoints from openapi.yaml and verify they are documented in .ai/doc-api.md
+            grep -E "^  /[a-zA-Z0-9_/{}]+" api/openapi/openapi.yaml | tr -d ' :' | while read -r endpoint; do
+              if ! grep -q "$endpoint" .ai/doc-api.md; then
+                echo "ERROR: Endpoint $endpoint is in api/openapi/openapi.yaml but missing in .ai/doc-api.md!"
+                exit 1
+              fi
+            done
+          fi
+          echo "Doc API & OpenAPI specification contracts are fully in sync."
+
+  test-suites:
+    name: Test Suites (Unit, Workflow & Integration)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.11'
+          cache: true
+
+      - name: Run Unit & Workflow Tests
+        run: |
+          if [ -f "go.mod" ]; then
+            go test -v -race -covermode=atomic -coverprofile=coverage.out ./test/unit/... ./test/workflow/...
+          else
+            echo "go.mod not yet created; skipping test execution."
+          fi
+
+      - name: Check Workflow Event History Thresholds
+        run: |
+          echo "Validating Temporal workflow history event limit guardrails (<10,000 events)..."
+          if [ -f "go.mod" ]; then
+            set -o pipefail
+            OUTPUT=$(go test -v -race -run "Test.*History" ./test/workflow/... 2>&1 | tee /dev/stderr)
+            if ! printf '%s\n' "$OUTPUT" | grep -E "^=== RUN   Test.*History" >/dev/null; then
+              echo "ERROR: No matching Test.*History tests were executed!"
+              exit 1
+            fi
+          else
+            if ! grep -q "10,000" .ai/architecture.md || ! grep -q "2,500" .ai/architecture.md; then
+              echo "ERROR: Temporal workflow history thresholds (<10,000 and <2,500 events) missing from architecture spec!"
+              exit 1
+            fi
+          fi
+          echo "Temporal history guardrail test validation complete."
+
+      - name: Run Chaos & Subprocess Resiliency Tests (-race)
+        run: |
+          go test -v -race -run "TestChaos_(WorkerDrop|SubprocessKill|CanaryDrain|RateLimiterBound)" ./test/chaos/...
+
+      - name: Run Load & <256 MiB Memory Ceiling Gate (non-race)
+        run: |
+          go test -v -run "TestChaos_(Load|MemoryCeiling|SustainedPresign)" ./test/chaos/...
+
+  container-and-helm-validation:
+    name: Distroless Docker & Helm Chart Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Build Multi-Stage Distroless Container Image
+        run: |
+          docker build -f deployments/docker/Dockerfile -t rag-ingestion-coordinator:ci .
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+
+      - name: Lint & Render Helm Chart (Standard Deployment & Argo Rollout Canary + Monitoring)
+        run: |
+          helm lint deployments/helm
+          helm template rag-ingestion-coordinator deployments/helm \
+            --set rollout.enabled=false > /tmp/rendered-deployment.yaml
+          helm template rag-ingestion-coordinator deployments/helm \
+            --set rollout.enabled=true \
+            --set monitoring.serviceMonitor.enabled=true \
+            --set monitoring.prometheusRule.enabled=true > /tmp/rendered-rollout.yaml
+          helm template rag-ingestion-coordinator deployments/helm \
+            --set secrets.create=true \
+            --set-string secrets.stringData.POSTGRES_DSN="postgres://user:pass@localhost:5432/db" > /tmp/rendered-secret.yaml
+          grep -q "kind: Deployment" /tmp/rendered-deployment.yaml
+          grep -q "kind: Rollout" /tmp/rendered-rollout.yaml
+          grep -q "kind: AnalysisTemplate" /tmp/rendered-rollout.yaml
+          grep -q "kind: ServiceMonitor" /tmp/rendered-rollout.yaml
+          grep -q "kind: PrometheusRule" /tmp/rendered-rollout.yaml
+          grep -q "kind: Secret" /tmp/rendered-secret.yaml
+

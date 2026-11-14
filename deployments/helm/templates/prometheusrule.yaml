@@ -1,0 +1,68 @@
+{{- if .Values.monitoring.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "rag-ingestion-coordinator.fullname" . }}
+  {{- if .Values.monitoring.prometheusRule.namespace }}
+  namespace: {{ .Values.monitoring.prometheusRule.namespace }}
+  {{- end }}
+  labels:
+    {{- include "rag-ingestion-coordinator.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: rag-ingestion-coordinator.rules
+      rules:
+        - alert: CoordinatorHighTaskQueueBacklog
+          # Fallback average latency expression if quantile buckets are unavailable:
+          # sum(rate(temporal_activity_schedule_to_start_seconds_sum{task_queue="doc-ai-task-queue"}[5m])) / clamp_min(sum(rate(temporal_activity_schedule_to_start_seconds_count{task_queue="doc-ai-task-queue"}[5m])), 1) > 60
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum(rate(temporal_activity_schedule_to_start_seconds_bucket{task_queue="doc-ai-task-queue"}[5m])) by (le)
+            ) > 60
+          for: 5m
+          labels:
+            severity: warning
+            service: rag-ingestion-coordinator
+          annotations:
+            summary: "High Temporal task queue backlog on doc-ai-task-queue"
+            description: "P95 schedule-to-start latency on doc-ai-task-queue exceeded 60s for >5m. Scale GPU Document AI workers or inspect Runbook 1."
+
+        - alert: CoordinatorElevatedWorkflowFailureRate
+          expr: |
+            sum(rate(coordinator_child_workflows_failed_total[15m]))
+            /
+            clamp_min(
+              sum(rate(coordinator_child_workflows_completed_total[15m]))
+              + sum(rate(coordinator_child_workflows_failed_total[15m])),
+              1
+            ) > 0.02
+          for: 5m
+          labels:
+            severity: critical
+            service: rag-ingestion-coordinator
+          annotations:
+            summary: "Elevated child workflow failure rate (>2%)"
+            description: "DocumentPartitionWorkflow failure ratio exceeded 2% over 15m for >5m. Check Runbook 3 (poison-pill slices) and Temporal UI."
+
+        - alert: CoordinatorRedisPublishDrops
+          expr: |
+            sum(rate(coordinator_redis_events_errors_total[2m]))
+            /
+            clamp_min(
+              sum(rate(coordinator_redis_events_published_total[2m]))
+              + sum(rate(coordinator_redis_events_errors_total[2m])),
+              1
+            ) > 0.001
+          for: 2m
+          labels:
+            severity: warning
+            service: rag-ingestion-coordinator
+          annotations:
+            summary: "Redis Pub/Sub milestone publish error rate >0.1%"
+            description: "Redis milestone event drop ratio exceeded 0.1% over 2m. Inspect Redis Sentinel/Cluster health and coordinator logs."
+{{- end }}
+
