@@ -5,32 +5,10 @@ metadata:
   labels:
     {{- include "rag-ingestion-coordinator.labels" . | nindent 4 }}
 data:
-  LOG_LEVEL: {{ .Values.config.logLevel | quote }}
-  HTTP_ADDR: {{ .Values.config.httpAddr | quote }}
-  GRPC_ADDR: {{ .Values.config.grpcAddr | quote }}
-  TEMPORAL_HOST_PORT: {{ .Values.config.temporalHostPort | quote }}
-  TEMPORAL_NAMESPACE: {{ .Values.config.temporalNamespace | quote }}
-  POSTGRES_SSLMODE: {{ .Values.config.postgresSSLMode | quote }}
-  POSTGRES_MAX_CONNS: {{ .Values.config.postgresMaxConns | quote }}
-  POSTGRES_MIN_CONNS: {{ .Values.config.postgresMinConns | quote }}
-  AUTO_MIGRATE: {{ .Values.config.autoMigrate | quote }}
-  REDIS_ADDRS: {{ .Values.config.redisAddrs | quote }}
-  {{- if .Values.config.redisMasterName }}
-  REDIS_MASTER_NAME: {{ .Values.config.redisMasterName | quote }}
+  PORT: {{ default "8080" (get .Values.env "PORT") | quote }}
+  GRPC_PORT: {{ default "50051" (get .Values.env "GRPC_PORT") | quote }}
+  {{- range $key, $val := .Values.env }}
+  {{- if and (ne $key "secretName") (ne $key "PORT") (ne $key "GRPC_PORT") (ne $val nil) }}
+  {{ $key }}: {{ $val | quote }}
   {{- end }}
-  {{- if .Values.config.redisUsername }}
-  REDIS_USERNAME: {{ .Values.config.redisUsername | quote }}
   {{- end }}
-  REDIS_DB: {{ .Values.config.redisDB | quote }}
-  REDIS_TLS_ENABLED: {{ .Values.config.redisTLSEnabled | quote }}
-  S3_REGION: {{ .Values.config.s3Region | quote }}
-  S3_BUCKET: {{ .Values.config.s3Bucket | quote }}
-  {{- if .Values.config.s3Endpoint }}
-  S3_ENDPOINT: {{ .Values.config.s3Endpoint | quote }}
-  {{- end }}
-  S3_USE_PATH_STYLE: {{ .Values.config.s3UsePathStyle | quote }}
-  USE_HASH_PREFIX_S3_LAYOUT: {{ .Values.config.useHashPrefixS3Layout | quote }}
-  ENABLE_INSPECTION_WORKER: {{ .Values.config.enableInspectionWorker | quote }}
-  SHUTDOWN_DRAIN_DELAY: {{ .Values.config.shutdownDrainDelay | quote }}
-  OPENAPI_SPEC_PATH: {{ .Values.config.openAPISpecPath | quote }}
-

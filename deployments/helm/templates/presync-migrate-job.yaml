@@ -37,9 +37,9 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
           env:
             - name: LOG_LEVEL
-              value: {{ .Values.config.logLevel | quote }}
+              value: {{ default "info" (get .Values.env "LOG_LEVEL") | quote }}
             - name: POSTGRES_SSLMODE
-              value: {{ .Values.config.postgresSSLMode | quote }}
+              value: {{ default "require" (get .Values.env "POSTGRES_SSLMODE") | quote }}
             - name: POSTGRES_DSN
               valueFrom:
                 secretKeyRef:
