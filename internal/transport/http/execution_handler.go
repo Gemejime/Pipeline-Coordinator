@@ -125,8 +125,10 @@ func (h *ExecutionHandler) writeExecutionError(
 	tenantID, documentID, workflowID string,
 	err error,
 ) {
-	statusCode := http.StatusBadRequest
-	errCode := "BAD_REQUEST"
+	var (
+		statusCode int
+		errCode    string
+	)
 
 	switch {
 	case errors.Is(err, service.ErrTenantMismatch):

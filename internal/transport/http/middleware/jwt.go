@@ -105,9 +105,7 @@ func (v *HMACJWTValidator) ValidateToken(ctx context.Context, rawToken string) (
 
 	scopes := make([]string, 0, len(raw.Scopes))
 	scopes = append(scopes, raw.Scopes...)
-	for _, s := range strings.Fields(raw.Scope) {
-		scopes = append(scopes, s)
-	}
+	scopes = append(scopes, strings.Fields(raw.Scope)...)
 
 	return &AuthClaims{
 		TenantID: strings.TrimSpace(raw.TenantID),

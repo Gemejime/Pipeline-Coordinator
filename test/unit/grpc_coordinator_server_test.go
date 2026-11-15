@@ -231,15 +231,20 @@ func TestGRPC_CompleteUploadURL(t *testing.T) {
 
 	t.Run("error mapping invalid completion to InvalidArgument", func(t *testing.T) {
 		t.Parallel()
+		called := false
 		mockUp := &mockUploadCoordinator{
 			completeMultipartUploadFn: func(ctx context.Context, req coordinatorv1.CompleteMultipartUploadRequest) (*coordinatorv1.CompleteMultipartUploadResponse, error) {
+				called = true
 				return nil, service.ErrInvalidMultipartCompletion
 			},
 		}
 
 		client := setupGRPCTestServer(t, mockUp, &mockExecutionCoordinator{})
-		_, err := client.CompleteUploadURL(withBearerToken(context.Background(), "valid-write-token"), &coordinatorv1.CompleteMultipartUploadRequest{})
+		_, err := client.CompleteUploadURL(withBearerToken(context.Background(), "valid-write-token"), &coordinatorv1.CompleteMultipartUploadRequest{
+			TenantID: "tenant-corp-01",
+		})
 		require.Error(t, err)
+		assert.True(t, called)
 		st, ok := status.FromError(err)
 		require.True(t, ok)
 		assert.Equal(t, codes.InvalidArgument, st.Code())

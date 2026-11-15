@@ -235,9 +235,7 @@ func parseJWTClaimsPayload(token string) (*AuthClaims, error) {
 		return nil, ErrInvalidBearerToken
 	}
 	scopes := append([]string(nil), raw.Scopes...)
-	for _, s := range strings.Fields(raw.Scope) {
-		scopes = append(scopes, s)
-	}
+	scopes = append(scopes, strings.Fields(raw.Scope)...)
 	return &AuthClaims{
 		TenantID: strings.TrimSpace(raw.TenantID),
 		Subject:  raw.Sub,

@@ -90,7 +90,7 @@ jobs:
       - name: Run Gosec AST Scanner
         run: |
           if [ -f "go.mod" ]; then
-            go install github.com/securego/gosec/v2/cmd/gosec@v2.21.4
+            go install github.com/securego/gosec/v2/cmd/gosec@v2.22.1
             gosec -fmt=text -severity=medium ./...
           fi
 

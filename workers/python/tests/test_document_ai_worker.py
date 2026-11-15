@@ -315,15 +315,37 @@ class TestSyncEnvToDeploymentsScript(unittest.TestCase):
         self.assertFalse(sync_script.is_sensitive("S3_BUCKET"))
 
     def test_check_drift_on_current_workspace_passes(self):
+        import tempfile
         from pathlib import Path
-        repo_root = Path(__file__).resolve().parents[3]
-        env_prod = repo_root / ".env.prod"
-        values_yaml = repo_root / "deployments" / "helm" / "values.yaml"
         import sync_env_to_deployments as sync_script
 
-        clean, drifts = sync_script.check_drift(env_prod, values_yaml)
-        self.assertTrue(clean, f"Expected zero drift, got: {drifts}")
-        self.assertEqual(len(drifts), 0)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            temp_env = tmp_path / ".env.prod"
+            temp_values = tmp_path / "values.yaml"
+
+            temp_env.write_text(
+                "LOG_LEVEL=info\n"
+                "HTTP_ADDR=:8080\n"
+                "GRPC_ADDR=:50051\n"
+                "POSTGRES_DSN=postgres://user:pass@localhost:5432/db\n"
+                "AUTH_HMAC_SECRET=01234567890123456789012345678901\n",
+                encoding="utf-8",
+            )
+            temp_values.write_text(
+                "env:\n"
+                '  secretName: "rag-ingestion-coordinator-secrets"\n'
+                '  PORT: "8080"\n'
+                '  GRPC_PORT: "50051"\n'
+                '  GRPC_ADDR: ":50051"\n'
+                '  HTTP_ADDR: ":8080"\n'
+                '  LOG_LEVEL: "info"\n',
+                encoding="utf-8",
+            )
+
+            clean, drifts = sync_script.check_drift(temp_env, temp_values)
+            self.assertTrue(clean, f"Expected zero drift, got: {drifts}")
+            self.assertEqual(len(drifts), 0)
 
 
 class TestInjectK8sSecretsScript(unittest.TestCase):
