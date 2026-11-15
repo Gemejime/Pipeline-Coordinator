@@ -177,7 +177,7 @@ go run cmd/coordinator/main.go
 cd workers/python
 python -m venv .venv
 source .venv/bin/activate  # Or on Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r rag_document_ai_worker/requirements.txt
 python -m rag_document_ai_worker.worker
 ```
 

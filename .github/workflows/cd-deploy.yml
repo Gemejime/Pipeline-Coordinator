@@ -44,6 +44,8 @@ jobs:
       K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE || 'default' }}
       K8S_SECRET_NAME: ${{ vars.K8S_SECRET_NAME || 'rag-ingestion-coordinator-secrets' }}
       DRY_RUN: ${{ inputs.dry_run || false }}
+      HAVE_KUBECONFIG: ${{ secrets.KUBECONFIG != '' }}
+      HAVE_AWS_ROLE_TO_ASSUME: ${{ secrets.AWS_ROLE_TO_ASSUME != '' }}
 
     steps:
       - name: Checkout Code
@@ -68,7 +70,7 @@ jobs:
           version: v1.31.0
 
       - name: Configure AWS Credentials
-        if: ${{ env.DRY_RUN != 'true' && !secrets.KUBECONFIG && secrets.AWS_ROLE_TO_ASSUME }}
+        if: ${{ env.DRY_RUN != 'true' && env.HAVE_KUBECONFIG != 'true' && env.HAVE_AWS_ROLE_TO_ASSUME == 'true' }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
