@@ -1,0 +1,27 @@
+{{- if .Values.rollout.enabled }}
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: {{ include "rag-ingestion-coordinator.fullname" . }}
+  labels:
+    {{- include "rag-ingestion-coordinator.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      {{- include "rag-ingestion-coordinator.selectorLabels" . | nindent 6 }}
+  template:
+    {{- include "rag-ingestion-coordinator.podTemplate" . | nindent 4 }}
+  strategy:
+    canary:
+      stableService: {{ include "rag-ingestion-coordinator.fullname" . }}-stable
+      canaryService: {{ include "rag-ingestion-coordinator.fullname" . }}-canary
+      {{- with .Values.rollout.canary.trafficRouting }}
+      trafficRouting:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      steps:
+        {{- tpl (.Values.rollout.canary.steps | toYaml) . | nindent 8 }}
+{{- end }}
+

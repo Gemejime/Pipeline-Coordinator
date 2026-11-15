@@ -1,0 +1,39 @@
+{{- if and .Values.rollout.enabled .Values.rollout.analysis.enabled }}
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: {{ include "rag-ingestion-coordinator.fullname" . }}-canary-analysis
+  labels:
+    {{- include "rag-ingestion-coordinator.labels" . | nindent 4 }}
+spec:
+  metrics:
+    - name: child-workflow-failure-rate
+      interval: {{ .Values.rollout.analysis.interval }}
+      count: {{ .Values.rollout.analysis.count }}
+      failureLimit: {{ .Values.rollout.analysis.failureLimit }}
+      successCondition: "len(result) == 0 || result[0] <= {{ .Values.rollout.analysis.maxFailureRate }}"
+      provider:
+        prometheus:
+          address: {{ .Values.rollout.analysis.prometheusAddress | quote }}
+          query: |
+            sum(rate(coordinator_child_workflows_failed_total[5m]))
+            /
+            clamp_min(
+              sum(rate(coordinator_child_workflows_completed_total[5m]))
+              + sum(rate(coordinator_child_workflows_failed_total[5m])),
+              1
+            )
+    - name: root-workflow-start-error-rate
+      interval: {{ .Values.rollout.analysis.interval }}
+      count: {{ .Values.rollout.analysis.count }}
+      failureLimit: {{ .Values.rollout.analysis.failureLimit }}
+      successCondition: "len(result) == 0 || result[0] <= {{ .Values.rollout.analysis.maxFailureRate }}"
+      provider:
+        prometheus:
+          address: {{ .Values.rollout.analysis.prometheusAddress | quote }}
+          query: |
+            sum(rate(coordinator_workflow_starts_total{status="FAILED"}[5m]))
+            /
+            clamp_min(sum(rate(coordinator_workflow_starts_total[5m])), 1)
+{{- end }}
+

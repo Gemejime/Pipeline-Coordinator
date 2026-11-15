@@ -1,0 +1,159 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "rag-ingestion-coordinator.fullname" . }}
+  labels:
+    {{- include "rag-ingestion-coordinator.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "rag-ingestion-coordinator.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.ingress.apiGateway.namespaceSelector | nindent 12 }}
+          {{- if .Values.networkPolicy.ingress.apiGateway.podSelector }}
+          podSelector:
+            {{- toYaml .Values.networkPolicy.ingress.apiGateway.podSelector | nindent 12 }}
+          {{- end }}
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 50051
+    - from:
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.ingress.prometheus.namespaceSelector | nindent 12 }}
+          {{- if .Values.networkPolicy.ingress.prometheus.podSelector }}
+          podSelector:
+            {{- toYaml .Values.networkPolicy.ingress.prometheus.podSelector | nindent 12 }}
+          {{- end }}
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    # Cluster DNS (kube-dns / CoreDNS)
+    - to:
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.egress.dns.namespaceSelector | nindent 12 }}
+          {{- if .Values.networkPolicy.egress.dns.podSelector }}
+          podSelector:
+            {{- toYaml .Values.networkPolicy.egress.dns.podSelector | nindent 12 }}
+          {{- end }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Temporal Frontend (gRPC 7233)
+    - to:
+        {{- if .Values.networkPolicy.egress.temporal.namespaceSelector }}
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.egress.temporal.namespaceSelector | nindent 12 }}
+          {{- if .Values.networkPolicy.egress.temporal.podSelector }}
+          podSelector:
+            {{- toYaml .Values.networkPolicy.egress.temporal.podSelector | nindent 12 }}
+          {{- end }}
+        {{- end }}
+        {{- range .Values.networkPolicy.egress.temporal.cidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 7233
+    # PostgreSQL / PgBouncer (5432)
+    - to:
+        {{- if .Values.networkPolicy.egress.postgres.namespaceSelector }}
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.egress.postgres.namespaceSelector | nindent 12 }}
+          {{- if .Values.networkPolicy.egress.postgres.podSelector }}
+          podSelector:
+            {{- toYaml .Values.networkPolicy.egress.postgres.podSelector | nindent 12 }}
+          {{- end }}
+        {{- end }}
+        {{- range .Values.networkPolicy.egress.postgres.cidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 5432
+    # Redis Pub/Sub (6379)
+    - to:
+        {{- if .Values.networkPolicy.egress.redis.namespaceSelector }}
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.egress.redis.namespaceSelector | nindent 12 }}
+          {{- if .Values.networkPolicy.egress.redis.podSelector }}
+          podSelector:
+            {{- toYaml .Values.networkPolicy.egress.redis.podSelector | nindent 12 }}
+          {{- end }}
+        {{- end }}
+        {{- range .Values.networkPolicy.egress.redis.cidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 6379
+    # Scoped AWS S3 / STS HTTPS (443) for s3:CompleteMultipartUpload & presigning
+    - to:
+        {{- range .Values.networkPolicy.egress.awsHTTPS.cidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 443
+{{- if .Values.migration.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "rag-ingestion-coordinator.fullname" . }}-migration
+  labels:
+    {{- include "rag-ingestion-coordinator.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "rag-ingestion-coordinator.migrationSelectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.egress.dns.namespaceSelector | nindent 12 }}
+          {{- if .Values.networkPolicy.egress.dns.podSelector }}
+          podSelector:
+            {{- toYaml .Values.networkPolicy.egress.dns.podSelector | nindent 12 }}
+          {{- end }}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        {{- if .Values.networkPolicy.egress.postgres.namespaceSelector }}
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.egress.postgres.namespaceSelector | nindent 12 }}
+          {{- if .Values.networkPolicy.egress.postgres.podSelector }}
+          podSelector:
+            {{- toYaml .Values.networkPolicy.egress.postgres.podSelector | nindent 12 }}
+          {{- end }}
+        {{- end }}
+        {{- range .Values.networkPolicy.egress.postgres.cidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - protocol: TCP
+          port: 5432
+{{- end }}
+{{- end }}
+
