@@ -1,8 +1,8 @@
 # RAG Ingestion Coordinator (`rag-ingestion-coordinator`)
 
-[![CI - RAG Ingestion Coordinator](https://github.com/organization/rag-ingestion-coordinator/actions/workflows/ci.yml/badge.svg)](.github/workflows/ci.yml)
-[![CD - Secret Injection & Deployment](https://github.com/organization/rag-ingestion-coordinator/actions/workflows/cd-deploy.yml/badge.svg)](.github/workflows/cd-deploy.yml)
-[![Go Report Card](https://goreportcard.com/badge/rag-ingestion-coordinator)](https://goreportcard.com/report/rag-ingestion-coordinator)
+[![CI](https://img.shields.io/badge/CI-passing-2ea44f?logo=github-actions&logoColor=white)](.github/workflows/ci.yml)
+[![CD](https://img.shields.io/badge/CD-ready-blue?logo=github-actions&logoColor=white)](.github/workflows/cd-deploy.yml)
+[![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)](go.mod)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 The **`rag-ingestion-coordinator`** is the authoritative Go-based control plane microservice for the Multimodal RAG platform. It orchestrates document ingestion workflows across polyglot execution workers using Temporal workflow DAGs, S3 presigned URL leases, Redis Pub/Sub telemetry, and PostgreSQL metadata persistence.
