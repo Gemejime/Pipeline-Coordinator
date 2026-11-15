@@ -89,7 +89,7 @@ env:
   S3_REGION: "us-east-1"
   S3_USE_PATH_STYLE: "false"
   SHUTDOWN_DRAIN_DELAY: "5s"
-  TEMPORAL_HOST_PORT: "localhost:7233"
+  TEMPORAL_HOST_PORT: "temporal-frontend.temporal.svc.cluster.local:7233"
   TEMPORAL_NAMESPACE: "default"
   TEMPORAL_TASK_QUEUE: "doc-ai-task-queue"
   USE_HASH_PREFIX_S3_LAYOUT: "false"
@@ -101,9 +101,10 @@ secrets:
     postgresDSN: "POSTGRES_DSN"
     redisPassword: "REDIS_PASSWORD"
     authHMACSecret: "AUTH_HMAC_SECRET"
-    authStaticTokensJSON: ""
-    awsAccessKeyID: ""
-    awsSecretAccessKey: ""
+    authStaticTokensJSON: "AUTH_STATIC_TOKENS_JSON"
+    awsAccessKeyID: "AWS_ACCESS_KEY_ID"
+    awsSecretAccessKey: "AWS_SECRET_ACCESS_KEY"
+    awsSessionToken: "AWS_SESSION_TOKEN"
   stringData: {}
 
 probes:
@@ -229,7 +230,7 @@ networkPolicy:
     redis:
       namespaceSelector:
         matchLabels:
-          kubernetes.io/metadata.name: redis
+          kubernetes.io/metadata.name: rag-system
       podSelector: {}
       cidrs: []
     awsHTTPS:

@@ -4,10 +4,11 @@
 ## Topology: 6 Nodes (3 Primary Shards + 3 Secondary Replicas)
 ## ==============================================================================
 
-global:
-  redis:
-    existingSecret: "rag-ingestion-coordinator-secrets"
-    existingSecretPasswordKey: "REDIS_PASSWORD"
+fullnameOverride: "rag-ingestion-coordinator-redis"
+
+## Shared secret configuration consumed directly by Bitnami redis-cluster chart
+existingSecret: "rag-ingestion-coordinator-secrets"
+existingSecretPasswordKey: "REDIS_PASSWORD"
 
 ## Enable password authentication referencing the shared microservice secret
 usePassword: true
@@ -18,8 +19,10 @@ cluster:
   init: true
   nodes: 6
   replicas: 1
-  defaultExtraConfig: |
-    # Optimized for Redis 7.2 in-cluster low-latency event publishing
+
+redis:
+  ## Optimized for Redis 7.2 in-cluster low-latency event publishing
+  defaultConfigOverride: |
     cluster-node-timeout 5000
     cluster-migration-barrier 1
     cluster-require-full-coverage yes
@@ -31,14 +34,14 @@ cluster:
     timeout 0
     tcp-keepalive 300
 
-## Container resource boundaries (Strict memory ceiling & CPU throttling defense)
-resources:
-  requests:
-    cpu: 100m
-    memory: 256Mi
-  limits:
-    cpu: 500m
-    memory: 1Gi
+  ## Container resource boundaries (Strict memory ceiling & CPU throttling defense)
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
 
 ## State persistence (AOF + RDB snapshotting)
 persistence:

@@ -18,17 +18,17 @@ spec:
     helm:
       releaseName: rag-ingestion-coordinator-redis
       values: |
-        global:
-          redis:
-            existingSecret: "rag-ingestion-coordinator-secrets"
-            existingSecretPasswordKey: "REDIS_PASSWORD"
+        fullnameOverride: "rag-ingestion-coordinator-redis"
+        existingSecret: "rag-ingestion-coordinator-secrets"
+        existingSecretPasswordKey: "REDIS_PASSWORD"
         usePassword: true
         usePasswordFile: false
         cluster:
           init: true
           nodes: 6
           replicas: 1
-          defaultExtraConfig: |
+        redis:
+          defaultConfigOverride: |
             cluster-node-timeout 5000
             cluster-migration-barrier 1
             cluster-require-full-coverage yes
@@ -39,13 +39,13 @@ spec:
             tcp-backlog 511
             timeout 0
             tcp-keepalive 300
-        resources:
-          requests:
-            cpu: 100m
-            memory: 256Mi
-          limits:
-            cpu: 500m
-            memory: 1Gi
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
         persistence:
           enabled: true
           path: /bitnami/redis/data

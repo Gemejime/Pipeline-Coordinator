@@ -31,6 +31,7 @@ SECRET_KEYS = (
     "AUTH_STATIC_TOKENS_JSON",
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
 )
 
 REQUIRED_SECRET_KEYS = (
@@ -64,13 +65,47 @@ def parse_env_file(path: Path) -> Dict[str, str]:
             continue
         val = val.strip()
 
+        # Remove inline comments only when they occur outside quoted regions
+        cleaned_val = []
+        in_quote: Optional[str] = None
+        escaped = False
+        idx = 0
+        while idx < len(val):
+            ch = val[idx]
+            if escaped:
+                cleaned_val.append(ch)
+                escaped = False
+                idx += 1
+                continue
+            if ch == "\\":
+                cleaned_val.append(ch)
+                escaped = True
+                idx += 1
+                continue
+            if in_quote:
+                cleaned_val.append(ch)
+                if ch == in_quote:
+                    in_quote = None
+                idx += 1
+                continue
+
+            if ch in ('"', "'"):
+                in_quote = ch
+                cleaned_val.append(ch)
+                idx += 1
+                continue
+
+            if ch == "#" and (idx == 0 or val[idx - 1] in (" ", "\t")):
+                break
+
+            cleaned_val.append(ch)
+            idx += 1
+
+        val = "".join(cleaned_val).strip()
+
+        # Remove surrounding quotes from the remaining value
         if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"):
             val = val[1:-1]
-        else:
-            for idx, ch in enumerate(val):
-                if ch == "#" and idx > 0 and val[idx - 1] in (" ", "\t"):
-                    val = val[:idx].strip()
-                    break
 
         env_vars[key] = val
 
@@ -166,8 +201,11 @@ def apply_secret_to_k8s(
 
     if result.returncode != 0:
         # Sanitize stderr to ensure no potential token disclosure
-        clean_err = result.stderr.strip()
-        print(f"[ERROR] Failed to apply Kubernetes secret: {clean_err}", file=sys.stderr)
+        print(
+            f"[ERROR] Failed to apply Kubernetes secret (exit code {result.returncode}). "
+            "Verify cluster connectivity, namespace, and RBAC permissions.",
+            file=sys.stderr,
+        )
         sys.exit(result.returncode)
 
     print(f"[SUCCESS] Kubernetes Secret '{secret_name}' successfully configured.")

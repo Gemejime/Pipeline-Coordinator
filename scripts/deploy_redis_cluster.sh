@@ -63,24 +63,43 @@ if [ -n "${REDIS_PASSWORD}" ]; then
   AUTH_ARGS=(-a "${REDIS_PASSWORD}")
 fi
 
-echo "[INFO] Querying cluster info from ${POD_NAME}..."
-CLUSTER_INFO=$(kubectl exec -n "${NAMESPACE}" "${POD_NAME}" -c redis -- redis-cli "${AUTH_ARGS[@]}" cluster info 2>/dev/null || true)
+echo "[INFO] Querying cluster info from ${POD_NAME} (with retry)..."
+MAX_ATTEMPTS=12
+ATTEMPT=0
+CLUSTER_HEALTHY=false
+SLOTS_ASSIGNED=false
+CLUSTER_INFO=""
 
-if echo "${CLUSTER_INFO}" | grep -q "cluster_state:ok"; then
-  echo "[SUCCESS] Redis Cluster state is HEALTHY (cluster_state:ok)."
-else
-  echo "[WARN] Could not confirm cluster_state:ok immediately. Raw output:"
-  echo "${CLUSTER_INFO}"
+while [ "${ATTEMPT}" -lt "${MAX_ATTEMPTS}" ]; do
+  ATTEMPT=$((ATTEMPT + 1))
+  if CLUSTER_INFO=$(kubectl exec -n "${NAMESPACE}" "${POD_NAME}" -c redis -- redis-cli "${AUTH_ARGS[@]}" cluster info 2>/dev/null); then
+    if echo "${CLUSTER_INFO}" | grep -q "cluster_state:ok"; then
+      CLUSTER_HEALTHY=true
+    fi
+    if echo "${CLUSTER_INFO}" | grep -q "cluster_slots_assigned:16384"; then
+      SLOTS_ASSIGNED=true
+    fi
+    if [ "${CLUSTER_HEALTHY}" = "true" ] && [ "${SLOTS_ASSIGNED}" = "true" ]; then
+      break
+    fi
+  fi
+  echo "[WAIT] Cluster initializing (attempt ${ATTEMPT}/${MAX_ATTEMPTS})..."
+  sleep 5
+done
+
+if [ "${CLUSTER_HEALTHY}" != "true" ]; then
+  echo "[ERROR] Redis cluster unhealthy after ${MAX_ATTEMPTS} attempts. Output:" >&2
+  echo "${CLUSTER_INFO}" >&2
+  exit 1
 fi
+echo "[SUCCESS] Redis Cluster state is HEALTHY (cluster_state:ok)."
 
-SLOTS_ASSIGNED=$(echo "${CLUSTER_INFO}" | grep "cluster_slots_assigned" | tr -d '\r' || true)
-echo "[INFO] Slot allocation status: ${SLOTS_ASSIGNED}"
-
-if echo "${CLUSTER_INFO}" | grep -q "cluster_slots_assigned:16384"; then
-  echo "[SUCCESS] All 16,384 Redis cluster slots successfully assigned."
-else
-  echo "[WARN] Cluster initialization may still be fanning out slots across nodes."
+if [ "${SLOTS_ASSIGNED}" != "true" ]; then
+  echo "[ERROR] Redis cluster slots incomplete after ${MAX_ATTEMPTS} attempts. Output:" >&2
+  echo "${CLUSTER_INFO}" >&2
+  exit 1
 fi
+echo "[SUCCESS] All 16,384 Redis cluster slots successfully assigned."
 
 echo ""
 echo "=============================================================================="

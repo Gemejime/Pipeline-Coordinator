@@ -67,6 +67,13 @@ jobs:
         with:
           version: v1.31.0
 
+      - name: Configure AWS Credentials
+        if: ${{ env.DRY_RUN != 'true' && !secrets.KUBECONFIG && secrets.AWS_ROLE_TO_ASSUME }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
       - name: Configure Kubernetes Credentials
         if: ${{ env.DRY_RUN != 'true' }}
         run: |
@@ -95,6 +102,7 @@ jobs:
           echo "::add-mask::${{ secrets.REDIS_PASSWORD }}"
           echo "::add-mask::${{ secrets.AUTH_STATIC_TOKENS_JSON }}"
           echo "::add-mask::${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+          echo "::add-mask::${{ secrets.AWS_SESSION_TOKEN }}"
 
       - name: CI/CD Secret Injection (Kubernetes Secret)
         env:
@@ -104,6 +112,7 @@ jobs:
           AUTH_STATIC_TOKENS_JSON: ${{ secrets.AUTH_STATIC_TOKENS_JSON }}
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
         run: |
           set +x
           EXTRA_ARGS=""
@@ -119,19 +128,18 @@ jobs:
       - name: Deploy Helm Chart
         if: ${{ inputs.action != 'inject-secrets-only' }}
         run: |
-          HELM_ARGS=(
-            upgrade --install rag-ingestion-coordinator deployments/helm
-            --namespace "$K8S_NAMESPACE"
-            --values deployments/helm/values.yaml
-            --set secrets.existingSecret="$K8S_SECRET_NAME"
-          )
-
           if [ "$DRY_RUN" = "true" ]; then
-            HELM_ARGS+=(--dry-run)
-            echo "[INFO] Running Helm in dry-run mode..."
+            echo "[INFO] Running Helm in dry-run mode (rendering templates locally)..."
+            helm template rag-ingestion-coordinator deployments/helm \
+              --namespace "$K8S_NAMESPACE" \
+              --values deployments/helm/values.yaml \
+              --set secrets.existingSecret="$K8S_SECRET_NAME"
+          else
+            helm upgrade --install rag-ingestion-coordinator deployments/helm \
+              --namespace "$K8S_NAMESPACE" \
+              --values deployments/helm/values.yaml \
+              --set secrets.existingSecret="$K8S_SECRET_NAME"
           fi
-
-          helm "${HELM_ARGS[@]}"
 
       - name: Verify Rollout Status
         if: ${{ inputs.action != 'inject-secrets-only' && env.DRY_RUN != 'true' }}

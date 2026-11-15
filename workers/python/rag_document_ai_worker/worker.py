@@ -73,13 +73,49 @@ def load_dotenv(path: Optional[str] = None) -> None:
         if not key:
             continue
         val = raw_val.strip()
+
+        # Remove inline comments only when they occur outside quoted regions
+        cleaned_val = []
+        in_quote: Optional[str] = None
+        escaped = False
+        idx = 0
+        while idx < len(val):
+            ch = val[idx]
+            if escaped:
+                cleaned_val.append(ch)
+                escaped = False
+                idx += 1
+                continue
+            if ch == "\\":
+                cleaned_val.append(ch)
+                escaped = True
+                idx += 1
+                continue
+            if in_quote:
+                cleaned_val.append(ch)
+                if ch == in_quote:
+                    in_quote = None
+                idx += 1
+                continue
+
+            if ch in ('"', "'"):
+                in_quote = ch
+                cleaned_val.append(ch)
+                idx += 1
+                continue
+
+            if ch == "#" and (idx == 0 or val[idx - 1] in (" ", "\t")):
+                break
+
+            cleaned_val.append(ch)
+            idx += 1
+
+        val = "".join(cleaned_val).strip()
+
+        # Remove surrounding quotes from the remaining value
         if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"):
             val = val[1:-1]
-        else:
-            for idx, ch in enumerate(val):
-                if ch == "#" and idx > 0 and val[idx - 1] in (" ", "\t"):
-                    val = val[:idx].strip()
-                    break
+
         os.environ.setdefault(key, val)
 
 

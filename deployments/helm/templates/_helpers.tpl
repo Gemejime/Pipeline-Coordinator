@@ -70,6 +70,17 @@ Create the name of the service account to use.
 {{- end }}
 
 {{/*
+Create the name of the secret to use.
+*/}}
+{{- define "rag-ingestion-coordinator.secretName" -}}
+{{- if .Values.secrets.existingSecret }}
+{{- .Values.secrets.existingSecret }}
+{{- else }}
+{{- printf "%s-secrets" (include "rag-ingestion-coordinator.fullname" .) }}
+{{- end }}
+{{- end }}
+
+{{/*
 Shared hardened PodTemplateSpec used by both Deployment and Argo Rollout.
 */}}
 {{- define "rag-ingestion-coordinator.podTemplate" -}}
@@ -114,14 +125,14 @@ spec:
         - name: POSTGRES_DSN
           valueFrom:
             secretKeyRef:
-              name: {{ .Values.secrets.existingSecret }}
+              name: {{ include "rag-ingestion-coordinator.secretName" . }}
               key: {{ .Values.secrets.keys.postgresDSN }}
         {{- end }}
         {{- if .Values.secrets.keys.redisPassword }}
         - name: REDIS_PASSWORD
           valueFrom:
             secretKeyRef:
-              name: {{ .Values.secrets.existingSecret }}
+              name: {{ include "rag-ingestion-coordinator.secretName" . }}
               key: {{ .Values.secrets.keys.redisPassword }}
               optional: true
         {{- end }}
@@ -129,29 +140,40 @@ spec:
         - name: AUTH_HMAC_SECRET
           valueFrom:
             secretKeyRef:
-              name: {{ .Values.secrets.existingSecret }}
+              name: {{ include "rag-ingestion-coordinator.secretName" . }}
               key: {{ .Values.secrets.keys.authHMACSecret }}
         {{- end }}
         {{- if .Values.secrets.keys.authStaticTokensJSON }}
         - name: AUTH_STATIC_TOKENS_JSON
           valueFrom:
             secretKeyRef:
-              name: {{ .Values.secrets.existingSecret }}
+              name: {{ include "rag-ingestion-coordinator.secretName" . }}
               key: {{ .Values.secrets.keys.authStaticTokensJSON }}
+              optional: true
         {{- end }}
         {{- if .Values.secrets.keys.awsAccessKeyID }}
         - name: AWS_ACCESS_KEY_ID
           valueFrom:
             secretKeyRef:
-              name: {{ .Values.secrets.existingSecret }}
+              name: {{ include "rag-ingestion-coordinator.secretName" . }}
               key: {{ .Values.secrets.keys.awsAccessKeyID }}
+              optional: true
         {{- end }}
         {{- if .Values.secrets.keys.awsSecretAccessKey }}
         - name: AWS_SECRET_ACCESS_KEY
           valueFrom:
             secretKeyRef:
-              name: {{ .Values.secrets.existingSecret }}
+              name: {{ include "rag-ingestion-coordinator.secretName" . }}
               key: {{ .Values.secrets.keys.awsSecretAccessKey }}
+              optional: true
+        {{- end }}
+        {{- if .Values.secrets.keys.awsSessionToken }}
+        - name: AWS_SESSION_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "rag-ingestion-coordinator.secretName" . }}
+              key: {{ .Values.secrets.keys.awsSessionToken }}
+              optional: true
         {{- end }}
       startupProbe:
         httpGet:

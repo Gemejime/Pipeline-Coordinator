@@ -37,7 +37,7 @@ The `rag-ingestion-coordinator` utilizes Redis Pub/Sub as its high-throughput, d
 ### Why a Dedicated In-Cluster Clustered Redis?
 1. **Sub-Millisecond Tail Latency ($P99 < 1\text{ms}$)**: By collocating the 6-node Redis cluster within the same Kubernetes cluster and namespace (`rag-system`), network round-trips avoid VPC NAT gateways, cross-cloud hops, and external cloud ingress firewalls.
 2. **Horizontal Pub/Sub Fanout**: Redis Cluster partitions key ranges across 16,384 hash slots. For publish operations, cluster nodes broadcast messages across the cluster bus to connected subscribers without central broker bottlenecks.
-3. **High Availability with Automatic Failover**: If any Primary shard fails, its paired Secondary replica is promoted within 5 seconds (`cluster-node-timeout: 5000`), with zero data loss on AOF-synchronized events.
+3. **High Availability with Automatic Failover**: If any Primary shard fails, its paired Secondary replica is promoted within 5 seconds (`cluster-node-timeout: 5000`). While key-value state is safeguarded by AOF/RDB persistence, in-flight ephemeral Pub/Sub telemetry events may be dropped during failover socket reconnection; subscribers should reconcile document state via the coordinator's authoritative execution status API (`GET /api/v1/executions/{execution_id}`).
 4. **Hardened Resource Isolation**: Dedicated container limits (`cpu: 500m`, `memory: 1Gi`) prevent noisy neighbors from impacting ingestion telemetry.
 
 ---
@@ -159,5 +159,5 @@ To verify failover resilience without downtime:
 kubectl exec -it rag-ingestion-coordinator-redis-3 -n rag-system -c redis -- \
   redis-cli -a "$REDIS_PASS" cluster failover
 ```
-Monitor the coordinator logs to verify seamless failover with zero dropped telemetry events.
+Monitor the coordinator logs to verify seamless failover. Note that in-flight ephemeral Pub/Sub telemetry events may be dropped during socket reconnections; client subscribers should query the authoritative `/api/v1/executions/{execution_id}` endpoint to reconcile document ingestion status.
 

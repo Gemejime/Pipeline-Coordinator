@@ -43,7 +43,7 @@ spec:
             - name: POSTGRES_DSN
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.secrets.existingSecret }}
+                  name: {{ include "rag-ingestion-coordinator.secretName" . }}
                   key: {{ .Values.secrets.keys.postgresDSN }}
           resources:
             {{- toYaml .Values.migration.resources | nindent 12 }}

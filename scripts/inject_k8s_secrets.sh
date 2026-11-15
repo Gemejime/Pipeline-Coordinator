@@ -56,6 +56,10 @@ if [ -n "${AWS_SECRET_ACCESS_KEY:-}" ]; then
   CMD+=(--from-literal=AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}")
 fi
 
+if [ -n "${AWS_SESSION_TOKEN:-}" ]; then
+  CMD+=(--from-literal=AWS_SESSION_TOKEN="${AWS_SESSION_TOKEN}")
+fi
+
 if [ "${DRY_RUN}" = "true" ]; then
   "${CMD[@]}" >/dev/null
   echo "[DRY-RUN] Secret manifest successfully generated and validated for ${K8S_SECRET_NAME}."

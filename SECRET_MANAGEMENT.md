@@ -157,24 +157,30 @@ For S3 presigning and object storage access, **never use static AWS keys**. Inst
 ## 5. Secret Rotation Runbooks
 
 ### 5.1 Zero-Downtime PostgreSQL Password Rotation
-1. In PostgreSQL, create a secondary database user with identical permissions, or update the existing user's password using standard dual-credential rotation:
+1. In PostgreSQL, provision a secondary database user while the existing login remains active:
    ```sql
-   ALTER USER rag_coordinator WITH PASSWORD 'new_secure_password';
+   CREATE USER rag_coordinator_b WITH PASSWORD 'new_secure_password';
+   GRANT rag_coordinator_role TO rag_coordinator_b;
    ```
-2. Update `POSTGRES_DSN` in GitHub Actions Secrets or Secrets Manager.
+2. Update `POSTGRES_DSN` in GitHub Actions Secrets or Secrets Manager to use the secondary login credentials.
 3. Trigger `.github/workflows/cd-deploy.yml` with `inject-secrets-only`.
-4. Perform a rolling restart of the pods:
+4. Perform a rolling restart of the pods to transition connections to the secondary login:
    ```bash
    kubectl rollout restart deployment/rag-ingestion-coordinator -n default
    ```
 5. Confirm zero database errors in telemetry logs during rollout.
+6. Once the rollout is complete and all old pods are terminated, retire the former database user:
+   ```sql
+   DROP USER rag_coordinator;
+   ```
 
-### 5.2 Zero-Downtime HMAC Secret Rotation
-`AUTH_HMAC_SECRET` verifies caller authentication tokens:
-1. Update `AUTH_HMAC_SECRET` in GitHub Secrets.
-2. Run the CD Secret Injection workflow.
-3. Perform a rolling restart (`kubectl rollout restart`).
-4. Update client API gateway / caller token signing service to use the new secret key.
+### 5.2 HMAC Secret Rotation (Planned Authentication Interruption)
+`AUTH_HMAC_SECRET` configures the single shared symmetric key used to verify caller authentication tokens. Because the coordinator currently performs single-key validation without an old/new verification-key overlap window, rotating this secret requires a planned authentication interruption:
+1. Schedule a brief maintenance/rotation window with API clients and token issuers.
+2. Update `AUTH_HMAC_SECRET` in GitHub Secrets.
+3. Run the CD Secret Injection workflow (`inject-secrets-only`).
+4. Perform a rolling restart of coordinator pods (`kubectl rollout restart deployment/rag-ingestion-coordinator -n default`).
+5. Concurrently update client API gateway / caller token signing service to issue tokens signed with the new secret key, and instruct API clients to replace tokens issued under the former key.
 
 ### 5.3 Zero-Downtime Redis Password Rotation
 1. In Redis configuration, set both `requirepass` and `masterauth` to accept the new password.

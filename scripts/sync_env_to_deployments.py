@@ -7,6 +7,7 @@ and enforces zero configuration drift before commits.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -58,15 +59,47 @@ def parse_env_file(path: Path) -> Dict[str, str]:
             continue
         val = val.strip()
 
-        # Handle quoted values
+        # Remove inline comments only when they occur outside quoted regions
+        cleaned_val = []
+        in_quote: Optional[str] = None
+        escaped = False
+        idx = 0
+        while idx < len(val):
+            ch = val[idx]
+            if escaped:
+                cleaned_val.append(ch)
+                escaped = False
+                idx += 1
+                continue
+            if ch == "\\":
+                cleaned_val.append(ch)
+                escaped = True
+                idx += 1
+                continue
+            if in_quote:
+                cleaned_val.append(ch)
+                if ch == in_quote:
+                    in_quote = None
+                idx += 1
+                continue
+
+            if ch in ('"', "'"):
+                in_quote = ch
+                cleaned_val.append(ch)
+                idx += 1
+                continue
+
+            if ch == "#" and (idx == 0 or val[idx - 1] in (" ", "\t")):
+                break
+
+            cleaned_val.append(ch)
+            idx += 1
+
+        val = "".join(cleaned_val).strip()
+
+        # Remove surrounding quotes from the remaining value
         if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"):
             val = val[1:-1]
-        else:
-            # Strip unquoted comments (preceded by whitespace)
-            for idx, ch in enumerate(val):
-                if ch == "#" and idx > 0 and val[idx - 1] in (" ", "\t"):
-                    val = val[:idx].strip()
-                    break
 
         env_vars[key] = val
 
@@ -136,9 +169,9 @@ def update_values_yaml(
         if key in ("secretName", "PORT", "GRPC_PORT"):
             continue
         val = non_sensitive_vars[key]
-        # Escape internal quotes if any
-        escaped_val = val.replace('"', '\\"')
-        lines.append(f'  {key}: "{escaped_val}"')
+        # Encode values safely for YAML double-quoted scalar, preserving literal characters (e.g., Windows paths)
+        encoded_val = json.dumps(val)
+        lines.append(f"  {key}: {encoded_val}")
 
     new_env_block = "\n".join(lines) + "\n"
 
@@ -149,7 +182,7 @@ def update_values_yaml(
     )
 
     if pattern.search(content):
-        updated_content = pattern.sub(new_env_block + "\n", content, count=1)
+        updated_content = pattern.sub(lambda _: new_env_block + "\n", content, count=1)
     else:
         # If neither exists, append env: block before secrets: if present, else at end
         secrets_match = re.search(r"^(secrets:)", content, re.MULTILINE)
