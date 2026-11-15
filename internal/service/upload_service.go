@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -188,6 +189,9 @@ func (s *UploadService) CreateUploadURL(
 		return nil, err
 	}
 
+	if partCount64 < math.MinInt32 || partCount64 > math.MaxInt32 {
+		return nil, fmt.Errorf("%w: calculated multipart count %d out of bounds", ErrInvalidUploadRequest, partCount64)
+	}
 	partCount := int32(partCount64)
 	parts := make([]coordinatorv1.PresignedPart, 0, partCount)
 	for partNum := int32(1); partNum <= partCount; partNum++ {

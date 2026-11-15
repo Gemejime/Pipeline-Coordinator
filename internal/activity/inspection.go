@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -873,11 +874,14 @@ func validateCSVHeaderSample(header []byte) error {
 }
 
 func estimateDocumentPagesFromBytes(totalBytes int64) int32 {
-	estimatedPages := int32(totalBytes / (64 * 1024))
-	if estimatedPages < 1 {
-		estimatedPages = 1
+	pages64 := totalBytes / (64 * 1024)
+	if pages64 < 1 {
+		return 1
 	}
-	return estimatedPages
+	if pages64 < math.MinInt32 || pages64 > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	return int32(pages64)
 }
 
 func estimateMediaDurationFromBytes(totalBytes int64) float64 {

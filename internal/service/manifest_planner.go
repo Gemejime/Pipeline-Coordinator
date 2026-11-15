@@ -209,9 +209,17 @@ func planMediaWindowSlices(input ManifestPlanInput) ([]PartitionSlice, error) {
 		windows = append(windows, timeWindow{startSec: start, endSec: end})
 	}
 
-	totalSlices := int32(len(windows))
+	slicesCount := len(windows)
+	if slicesCount < math.MinInt32 || slicesCount > math.MaxInt32 {
+		return nil, fmt.Errorf("planned audio windows count %d out of bounds [%d, %d]", slicesCount, math.MinInt32, math.MaxInt32)
+	}
+	totalSlices := int32(slicesCount)
 	slices := make([]PartitionSlice, 0, totalSlices)
 	for i, w := range windows {
+		if i < math.MinInt32 || i > math.MaxInt32 {
+			return nil, fmt.Errorf("audio slice index %d out of bounds [%d, %d]", i, math.MinInt32, math.MaxInt32)
+		}
+		sliceIndex := int32(i)
 		startMarker := int(math.Round(w.startSec))
 		endMarker := int(math.Round(w.endSec))
 		rangeSpec := fmt.Sprintf("sec_%d_%d", startMarker, endMarker)
@@ -227,7 +235,7 @@ func planMediaWindowSlices(input ManifestPlanInput) ([]PartitionSlice, error) {
 
 		slices = append(slices, PartitionSlice{
 			SliceID:            sliceID,
-			SliceIndex:         int32(i),
+			SliceIndex:         sliceIndex,
 			TotalSlices:        totalSlices,
 			TenantID:           input.TenantID,
 			DocumentID:         input.DocumentID,

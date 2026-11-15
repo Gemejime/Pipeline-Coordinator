@@ -72,6 +72,8 @@ CLUSTER_INFO=""
 
 while [ "${ATTEMPT}" -lt "${MAX_ATTEMPTS}" ]; do
   ATTEMPT=$((ATTEMPT + 1))
+  CLUSTER_HEALTHY=false
+  SLOTS_ASSIGNED=false
   if CLUSTER_INFO=$(kubectl exec -n "${NAMESPACE}" "${POD_NAME}" -c redis -- redis-cli "${AUTH_ARGS[@]}" cluster info 2>/dev/null); then
     if echo "${CLUSTER_INFO}" | grep -q "cluster_state:ok"; then
       CLUSTER_HEALTHY=true

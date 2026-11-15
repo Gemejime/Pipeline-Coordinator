@@ -101,6 +101,8 @@ $ClusterInfo = ""
 
 while ($Attempt -lt $MaxAttempts) {
     $Attempt++
+    $ClusterHealthy = $false
+    $SlotsAssigned = $false
     $ClusterInfo = kubectl exec -n $Namespace $PodName -c redis -- redis-cli @AuthArgs cluster info 2>$null
     $ExecExit = $LASTEXITCODE
 

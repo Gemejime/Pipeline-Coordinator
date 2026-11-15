@@ -3,6 +3,8 @@ package workflow
 import (
 	"errors"
 	"fmt"
+	"math"
+
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
@@ -306,8 +308,18 @@ func IngestionCoordinatorWorkflow(ctx workflow.Context, req IngestionRequest) (*
 		)
 	}
 
+	slicesCount := len(slices)
+	if slicesCount < math.MinInt32 || slicesCount > math.MaxInt32 {
+		catalogTerminalRun(activity.TerminalStatusFailed, "total slices count out of int32 bounds")
+		publishMilestone(StageFailed, activity.TerminalStatusFailed)
+		return nil, temporal.NewNonRetryableApplicationError(
+			"total slices count out of int32 bounds",
+			activity.ErrCodeCorruptInput,
+			nil,
+		)
+	}
 	liveStatus.TotalPages = totalPages
-	liveStatus.TotalSlices = int32(len(slices))
+	liveStatus.TotalSlices = int32(slicesCount)
 	liveStatus.Stage = StageExtractSegments
 
 	// Partition current generation batch starting from NextSliceIndex (bounded to MaxSlicesPerGeneration = 100).
@@ -323,6 +335,15 @@ func IngestionCoordinatorWorkflow(ctx workflow.Context, req IngestionRequest) (*
 		endIdx = len(slices)
 	}
 	currentBatch := slices[startIdx:endIdx]
+	if endIdx < math.MinInt32 || endIdx > math.MaxInt32 {
+		catalogTerminalRun(activity.TerminalStatusFailed, "slice batch endIdx out of int32 bounds")
+		publishMilestone(StageFailed, activity.TerminalStatusFailed)
+		return nil, temporal.NewNonRetryableApplicationError(
+			"slice batch endIdx out of int32 bounds",
+			activity.ErrCodeCorruptInput,
+			nil,
+		)
+	}
 	nextSliceIndex := int32(endIdx)
 	resolvedPipelineConfig := ResolvePipelineConfig(req.TenantID, req.PipelineConfigID, req.PipelineConfig)
 
